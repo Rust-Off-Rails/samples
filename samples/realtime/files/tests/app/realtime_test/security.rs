@@ -384,6 +384,39 @@ async fn a_slow_consumer_is_warned_then_dropped() {
 }
 
 #[tokio::test]
+async fn a_client_that_stops_reading_is_dropped() {
+    let app = TestApp::new().await;
+    let ann = guest(&app.state, "Ann").await;
+    let mut cfg = SocketConfig::new(vec![ORIGIN.into()]);
+    cfg.send_timeout = Duration::from_millis(300);
+    let mut state = app.state.clone();
+    state.hub = Hub::with_cluster(Cluster::off("stuck"), cfg);
+    let (addr, _server) = serve(state.clone()).await;
+    let mut ws = Ws::as_guest(addr, &ann).await;
+    ws.join("room:lobby", None).await.unwrap();
+    // The client never reads again; the server keeps sending until its writes stall.
+    let big = json!({ "filler": "x".repeat(3500) });
+    let flood = {
+        let hub = state.hub.clone();
+        tokio::spawn(async move {
+            for _ in 0..20_000 {
+                hub.broadcast("room:lobby", None, "noise", &big);
+                tokio::task::yield_now().await;
+                if hub.total_conns() == 0 {
+                    break;
+                }
+            }
+        })
+    };
+    wait_until("the stuck connection is dropped", async || {
+        state.hub.total_conns() == 0
+    })
+    .await;
+    flood.abort();
+    drop(ws);
+}
+
+#[tokio::test]
 async fn presence_carries_names_never_emails() {
     let app = TestApp::new().await;
     let ann = guest(&app.state, "Ann").await;

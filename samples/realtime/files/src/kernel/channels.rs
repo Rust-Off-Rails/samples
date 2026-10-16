@@ -72,6 +72,9 @@ pub struct SocketConfig {
     pub max_joins_per_min: u32,
     /// How long a long-poll GET waits for frames.
     pub poll_wait: Duration,
+    /// A client that doesn't take a frame within this long has stopped reading: dropped, so a
+    /// stuck write can't hold the connection (and its revocation) forever.
+    pub send_timeout: Duration,
 }
 
 impl SocketConfig {
@@ -89,6 +92,7 @@ impl SocketConfig {
             max_topics: 20,
             max_joins_per_min: 30,
             poll_wait: Duration::from_secs(25),
+            send_timeout: Duration::from_secs(10),
         }
     }
 
@@ -379,16 +383,16 @@ impl Pipe for WsPipe {
     }
 
     async fn finish(mut self, bye: Option<Frame>, code: u16) {
+        // WHY: bounded: a client that stopped reading must not hold the goodbye open either.
+        let limit = Duration::from_secs(2);
         if let Some(bye) = bye {
-            let _ = self.socket.send(Message::Text(bye)).await;
+            let _ = tokio::time::timeout(limit, self.socket.send(Message::Text(bye))).await;
         }
-        let _ = self
-            .socket
-            .send(Message::Close(Some(CloseFrame {
-                code,
-                reason: "".into(),
-            })))
-            .await;
+        let close = Message::Close(Some(CloseFrame {
+            code,
+            reason: "".into(),
+        }));
+        let _ = tokio::time::timeout(limit, self.socket.send(close)).await;
         // WHY: read until the client answers the close (or 2 s pass): dropping a socket with
         // unread data sends a TCP reset, which can overtake our `bye`.
         let _ = tokio::time::timeout(Duration::from_secs(2), async {
@@ -565,7 +569,8 @@ pub async fn run<S: Channels, P: Pipe>(
                 }
                 if P::HEARTBEATS && due(now, last_ping, c.cfg.ping_every, tick_every) {
                     last_ping = now;
-                    if !pipe.ping().await {
+                    let pinged = tokio::time::timeout(c.cfg.send_timeout, pipe.ping()).await;
+                    if !pinged.unwrap_or(false) {
                         break None;
                     }
                 }
@@ -659,7 +664,10 @@ fn due(now: Instant, last: Instant, every: Duration, tick: Duration) -> bool {
 impl<S: Channels> Conn<S> {
     async fn send<P: Pipe>(&self, pipe: &mut P, frame: Frame) -> bool {
         self.hub.log_frame(&self.info, "out", &frame);
-        pipe.send(frame).await
+        // SECURITY: a client that stops reading can't park this task (and its revocation) on a full socket (test: a_client_that_stops_reading_is_dropped).
+        tokio::time::timeout(self.cfg.send_timeout, pipe.send(frame))
+            .await
+            .unwrap_or(false)
     }
 
     fn leave(&mut self, topic: &str) {
