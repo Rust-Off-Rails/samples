@@ -12,7 +12,7 @@
 {% endif %}
 <section class="panel" aria-labelledby="wf-title">
   <header><h2 id="wf-title">Waterfall</h2><span class="muted">request → spans → SQL → events{% if t.dropped > 0 %} · {{ t.dropped }} more not kept{% endif %}</span></header>
-  <div class="scroll"><table class="waterfall">
+  <div class="scroll" tabindex="0" role="region" aria-label="Table"><table class="waterfall">
     <caption class="visually-hidden">Spans, SQL statements and events of this request, in start order, with start offset and duration</caption>
     <thead><tr><th scope="col">Step</th><th scope="col" class="num">Start</th><th scope="col" class="num">Duration</th><th scope="col" class="wf-axis"><span class="visually-hidden">Timeline</span><span class="ticks" aria-hidden="true">{% for (_, l) in ticks %}<span>{{ l }}</span>{% endfor %}</span></th></tr></thead>
     <tbody>

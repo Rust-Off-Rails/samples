@@ -30,7 +30,7 @@
 <section class="panel" id="csp" aria-labelledby="csp-title">
   <header><h2 id="csp-title">CSP violations</h2><span class="muted">reported by the browser to <code>/dev/csp-reports</code></span></header>
   {% if csp.is_empty() %}<p class="empty">None reported. In development the CSP carries <code>report-uri /dev/csp-reports</code>, so an inline script or a third-party file that the policy blocks shows up here.</p>{% else %}
-  <div class="scroll"><table class="data-table"><thead><tr><th scope="col">Page</th><th scope="col">Directive</th><th scope="col">Blocked</th><th scope="col">Source</th><th scope="col" class="num">Count</th><th scope="col">Last</th></tr></thead>
+  <div class="scroll" tabindex="0" role="region" aria-label="Table"><table class="data-table"><thead><tr><th scope="col">Page</th><th scope="col">Directive</th><th scope="col">Blocked</th><th scope="col">Source</th><th scope="col" class="num">Count</th><th scope="col">Last</th></tr></thead>
   <tbody>{% for r in csp %}<tr><th scope="row" class="mono">{{ r.page }}</th><td class="mono">{{ r.directive }}</td><td class="mono">{{ r.blocked }}</td><td class="mono">{{ r.source }}</td><td class="num">{{ r.count }}</td><td class="muted">{{ r.when }}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
 </section>
 {% endblock %}

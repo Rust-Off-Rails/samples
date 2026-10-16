@@ -28,11 +28,11 @@
   <section class="panel" aria-labelledby="t-trend">
     <header><h2 id="t-trend">Duration, last {{ trend.len() }} runs</h2><span class="muted">red: a failure</span></header>
     <svg class="bars" viewBox="0 0 600 120" role="img" aria-label="Run durations, oldest to newest" focusable="false">{% for b in trend %}<rect class="b-{{ b.class }}" x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}" rx="2"><title>{{ b.label }}</title></rect>{% endfor %}</svg>
-    <details class="data pad"><summary>Data table</summary><div class="scroll"><table><thead><tr><th scope="col">Run</th><th scope="col">Duration</th><th scope="col">Result</th></tr></thead><tbody>{% for (id, dur, res) in trend_table %}<tr><td class="mono">{{ id }}</td><td>{{ dur }}</td><td>{{ res }}</td></tr>{% endfor %}</tbody></table></div></details>
+    <details class="data pad"><summary>Data table</summary><div class="scroll" tabindex="0" role="region" aria-label="Table"><table><thead><tr><th scope="col">Run</th><th scope="col">Duration</th><th scope="col">Result</th></tr></thead><tbody>{% for (id, dur, res) in trend_table %}<tr><td class="mono">{{ id }}</td><td>{{ dur }}</td><td>{{ res }}</td></tr>{% endfor %}</tbody></table></div></details>
   </section>
   <section class="panel" aria-labelledby="t-runs">
     <header><h2 id="t-runs">Runs</h2><span class="muted">SQLite and Postgres side by side</span></header>
-    <div class="scroll"><table class="data-table"><thead><tr><th scope="col">Run</th><th scope="col">SQLite</th><th scope="col">Postgres</th></tr></thead><tbody>
+    <div class="scroll" tabindex="0" role="region" aria-label="Table"><table class="data-table"><thead><tr><th scope="col">Run</th><th scope="col">SQLite</th><th scope="col">Postgres</th></tr></thead><tbody>
     {% for r in runs %}<tr{% if r.current %} aria-current="true" class="current"{% endif %}><th scope="row"><a href="{{ r.href }}" class="mono">{{ r.id }}</a><span class="sub">{{ r.when }} · {{ r.source }}</span></th>
       <td>{% if let Some(s) = r.sqlite %}<span class="badge tone-{{ s.tone }}">{{ s.passed }}/{{ s.passed + s.failed }}</span> <span class="muted">{{ s.duration }}</span>{% else %}<span class="muted">–</span>{% endif %}</td>
       <td>{% if let Some(s) = r.postgres %}<span class="badge tone-{{ s.tone }}">{{ s.passed }}/{{ s.passed + s.failed }}</span> <span class="muted">{{ s.duration }}</span>{% else %}<span class="muted">–</span>{% endif %}</td></tr>{% endfor %}

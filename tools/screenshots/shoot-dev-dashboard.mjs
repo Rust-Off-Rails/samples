@@ -19,14 +19,15 @@ const firstHref = async (page, path, selector) => {
   return href;
 };
 
-// Starts a traffic run once, so the four lab shots catch it mid-run.
-let labStarted = false;
-const startTraffic = async () => {
-  if (labStarted) return;
-  labStarted = true;
-  const body = new URLSearchParams({ paths: "/dev/lab/orders\n/\n/dev/lab/slow\n/dev/lab/orders/n-plus-one", rps: "40", secs: "45" });
+// Keeps a gentle traffic run going (the lab's own generator, at most 60 s each), so the live
+// numbers move in every shot and the lab screens catch a run mid-way.
+let runUntil = 0;
+const ensureTraffic = async () => {
+  if (Date.now() < runUntil) return;
+  const body = new URLSearchParams({ paths: "/dev/lab/orders\n/\n/dev/lab/orders\n/dev/lab/slow\n/dev/lab/orders/n-plus-one\n/up", rps: "12", secs: "60" });
   await fetch(`${BASE}/dev/dashboard/lab/traffic`, { method: "POST", body, redirect: "manual" });
-  await new Promise((r) => setTimeout(r, 3000));
+  runUntil = Date.now() + 61_000;
+  await new Promise((r) => setTimeout(r, 4000));
 };
 
 const screens = [
@@ -48,7 +49,7 @@ const screens = [
   ["tests", async () => "/dev/dashboard/tests"],
   ["github", async () => "/dev/dashboard/github"],
   ["config", async () => "/dev/dashboard/config"],
-  ["lab-running", async () => { await startTraffic(); return "/dev/dashboard/lab"; }],
+  ["lab-running", async () => "/dev/dashboard/lab"],
   ["forced-dark", async () => "/dev/dashboard", null, { themes: ["light"], cookie: "dark" }],
 ];
 
@@ -77,6 +78,7 @@ try {
         const errors = [];
         page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
         page.on("pageerror", (e) => errors.push(String(e)));
+        await ensureTraffic();
         const path = await resolve(page);
         await page.goto(`${BASE}${path}`, { waitUntil: "load" });
         if (act) await act(page);

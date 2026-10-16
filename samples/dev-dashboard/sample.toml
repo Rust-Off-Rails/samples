@@ -95,6 +95,9 @@ pub struct DashboardConfig {
     pub test_database_url: Option<String>,
     /// `CARGO_TARGET_DIR`: where nextest writes its JUnit report.
     pub cargo_target_dir: Option<String>,
+    /// `DASHBOARD_DEMO_HISTORY=true` (development only): fill the last hour with synthetic,
+    /// clearly marked history at boot (the demo and its screenshots).
+    pub demo_history: bool,
 }
 
 impl Default for DashboardConfig {
@@ -108,6 +111,7 @@ impl Default for DashboardConfig {
             github_fixture: None,
             test_database_url: None,
             cargo_target_dir: None,
+            demo_history: false,
         }
     }
 }
@@ -148,6 +152,8 @@ impl DashboardConfig {
             github_fixture: get("DASHBOARD_GITHUB_FIXTURE").filter(|_| env == AppEnv::Development),
             test_database_url: get("TEST_DATABASE_URL"),
             cargo_target_dir: get("CARGO_TARGET_DIR"),
+            demo_history: env == AppEnv::Development
+                && matches!(get("DASHBOARD_DEMO_HISTORY").as_deref(), Some("true" | "1")),
         })
     }
 }
@@ -181,6 +187,7 @@ impl fmt::Debug for DashboardConfig {
             .field("github_api", &self.github_api)
             .field("github_fixture", &self.github_fixture.is_some())
             .field("test_database_url", &set(&self.test_database_url))
+            .field("demo_history", &self.demo_history)
             .finish()
     }
 }
@@ -410,6 +417,7 @@ DASHBOARD_IN_PRODUCTION=false
 # TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres
 # CARGO_TARGET_DIR=target
 # DASHBOARD_GITHUB_FIXTURE=tests/fixtures/github   # development only: recorded GitHub answers (the demo)
+# DASHBOARD_DEMO_HISTORY=false             # development only: an hour of synthetic, marked history (the demo)
 '''
 
 [[wire]]

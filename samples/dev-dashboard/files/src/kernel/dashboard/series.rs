@@ -41,7 +41,33 @@ pub struct Sample {
     pub p99: u32,
     pub sql: f32,
     pub sql_p95: u32,
+    /// Requests per latency bucket (`LATENCY_BUCKETS`), for the heatmap.
+    pub lat: [u16; LATENCY_BUCKETS.len() + 1],
 }
+
+/// The heatmap's latency buckets: upper bounds in µs (the last bucket is everything slower).
+pub const LATENCY_BUCKETS: [u64; 10] = [
+    1_000, 2_500, 5_000, 10_000, 25_000, 50_000, 100_000, 250_000, 500_000, 1_000_000,
+];
+
+/// The buckets' labels, in order (the last is open-ended).
+pub const LATENCY_LABELS: [&str; 11] = [
+    "≤1ms", "≤2.5ms", "≤5ms", "≤10ms", "≤25ms", "≤50ms", "≤100ms", "≤250ms", "≤500ms", "≤1s", ">1s",
+];
+
+/// A marker on the charts: a boot, a deploy, a load-lab run, an error burst.
+#[derive(Clone, Debug, Serialize)]
+pub struct Annotation {
+    pub t: i64,
+    /// `boot`, `deploy`, `lab`, `errors`, `spike`.
+    pub kind: &'static str,
+    pub label: String,
+    /// Part of the demo's synthetic history.
+    pub demo: bool,
+}
+
+/// Annotations kept.
+pub const ANNOTATIONS: usize = 200;
 
 impl Sample {
     pub fn pool_in_use(&self) -> u32 {
@@ -117,6 +143,9 @@ impl Range {
 
 /// The rings, plus the minute being accumulated.
 pub struct Series {
+    annotations: VecDeque<Annotation>,
+    /// Until when (unix seconds) the rings hold the demo's synthetic history.
+    pub demo_until: Option<i64>,
     seconds: VecDeque<Sample>,
     minutes: VecDeque<Sample>,
     minute: Vec<Sample>,
@@ -127,6 +156,8 @@ pub struct Series {
 impl Default for Series {
     fn default() -> Self {
         Self {
+            annotations: VecDeque::new(),
+            demo_until: None,
             seconds: VecDeque::with_capacity(SECOND_POINTS),
             minutes: VecDeque::with_capacity(MINUTE_POINTS),
             minute: Vec::with_capacity(60),
@@ -184,6 +215,15 @@ impl Series {
             p99: self.minute_hist.quantile(0.99) as u32,
             sql: avg(|s| s.sql),
             sql_p95: self.minute_sql_hist.quantile(0.95) as u32,
+            lat: {
+                let mut sum = [0_u16; LATENCY_BUCKETS.len() + 1];
+                for s in &self.minute {
+                    for (a, b) in sum.iter_mut().zip(s.lat.iter()) {
+                        *a = a.saturating_add(*b);
+                    }
+                }
+                sum
+            },
         };
         if self.minutes.len() == MINUTE_POINTS {
             self.minutes.pop_front();
@@ -192,6 +232,53 @@ impl Series {
         self.minute.clear();
         self.minute_hist.clear();
         self.minute_sql_hist.clear();
+    }
+
+    pub fn annotate(&mut self, a: Annotation) {
+        // INVARIANT: bounded (test: the_dashboard_stays_within_its_memory_bound).
+        if self.annotations.len() == ANNOTATIONS {
+            self.annotations.pop_front();
+        }
+        self.annotations.push_back(a);
+    }
+
+    /// Annotations between `from` and `to` (unix seconds).
+    pub fn annotations(&self, from: i64, to: i64) -> Vec<Annotation> {
+        self.annotations
+            .iter()
+            .filter(|a| a.t >= from && a.t <= to)
+            .cloned()
+            .collect()
+    }
+
+    /// The samples from `from` to `to` (unix seconds), at 1 s when the seconds ring covers them,
+    /// else at 1 min.
+    pub fn between(&self, from: i64, to: i64) -> (Vec<Sample>, i64) {
+        let covered = self.seconds.front().is_some_and(|s| s.t <= from);
+        if covered || to - from <= 120 {
+            (
+                self.seconds
+                    .iter()
+                    .filter(|s| s.t > from && s.t <= to)
+                    .copied()
+                    .collect(),
+                1,
+            )
+        } else {
+            let mut out: Vec<Sample> = self
+                .minutes
+                .iter()
+                .filter(|s| s.t > from && s.t <= to)
+                .copied()
+                .collect();
+            if let Some(last) = self.minute.last()
+                && last.t > from
+                && last.t <= to
+            {
+                out.push(*last);
+            }
+            (out, 60)
+        }
     }
 
     pub fn latest(&self) -> Option<Sample> {

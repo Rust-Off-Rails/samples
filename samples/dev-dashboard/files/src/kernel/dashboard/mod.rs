@@ -24,6 +24,7 @@ pub mod access;
 pub mod charts;
 pub mod cli;
 pub mod collector;
+pub mod demo;
 pub mod github;
 pub mod hist;
 pub mod http;
@@ -72,6 +73,8 @@ pub struct Hub {
     pub insights: insights::InsightState,
     /// The address `serve` listens on (`http://127.0.0.1:3000`), for the load lab.
     pub serving: OnceLock<String>,
+    /// Resident memory at the collector's first sample ("since boot" on the memory card).
+    pub boot_rss: AtomicU64,
 }
 
 /// Per-second accumulators.
@@ -103,6 +106,7 @@ impl Default for Hub {
             github: github::Cache::default(),
             insights: insights::InsightState::default(),
             serving: OnceLock::new(),
+            boot_rss: AtomicU64::new(0),
         }
     }
 }
@@ -193,6 +197,19 @@ pub fn serve_started(state: &crate::state::AppState) {
         (None, false) => format!("http://127.0.0.1:{}", c.port),
     };
     let _ = HUB.serving.set(addr);
+    {
+        let now = chrono::Utc::now().timestamp();
+        let mut series = lock(&HUB.series);
+        if c.dashboard.demo_history {
+            demo::backfill(&mut series, now);
+        }
+        series.annotate(series::Annotation {
+            t: now,
+            kind: "boot",
+            label: "server started".into(),
+            demo: false,
+        });
+    }
     collector::spawn(state.clone());
 }
 

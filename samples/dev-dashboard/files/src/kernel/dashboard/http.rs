@@ -172,7 +172,9 @@ impl RequestCtx {
             at: Utc::now(),
             method,
             route,
-            path: crate::kernel::ui::truncate(path, 200),
+            // SECURITY: an emailed link's token in the path never reaches a trace, a log line or
+            // the 404 list (test: not_found_paths_keep_the_nearest_route_and_a_safe_referrer).
+            path: crate::kernel::ui::truncate(&crate::kernel::redact::path(path), 200),
             request_id,
             referrer: None,
             inner: Mutex::new(CtxInner::default()),
@@ -330,7 +332,7 @@ pub fn referrer_of(raw: &str) -> String {
         Some((_, rest)) => {
             let (host, path) = rest.split_once('/').map_or((rest, ""), |(h, p)| (h, p));
             if host.starts_with("localhost") || host.starts_with("127.0.0.1") {
-                crate::kernel::ui::truncate(&format!("/{path}"), 120)
+                crate::kernel::ui::truncate(&crate::kernel::redact::path(&format!("/{path}")), 120)
             } else {
                 crate::kernel::ui::truncate(host, 80)
             }

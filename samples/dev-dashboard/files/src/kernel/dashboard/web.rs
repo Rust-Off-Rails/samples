@@ -24,7 +24,7 @@ use chrono::Utc;
 use futures::Stream;
 use serde::Deserialize;
 
-use super::charts::{self, ChartView, SeriesSpec, Spark, Unit};
+use super::charts::{self, ChartView, Heatmap, SeriesSpec, Spark, Unit, Window};
 use super::series::{Range, Sample};
 use super::trace::{LogLine, Trace, WaterRow};
 use super::{
@@ -293,52 +293,104 @@ fn latest(range: Range) -> (Vec<Sample>, i64) {
     (lock(&HUB.series).window(range, now), now)
 }
 
-/// The overview's cards, from the last 5 minutes.
+/// When a card turns amber and red. APP: your app's thresholds.
+pub struct Health {
+    pub cpu: (f32, f32),
+    /// p95 latency, µs.
+    pub p95: (u32, u32),
+    /// Server errors as a share of requests.
+    pub errors: (f32, f32),
+    /// Pool connections in use as a share of the maximum.
+    pub pool: (f32, f32),
+    /// Resident memory growth since boot, bytes.
+    pub memory_growth: (u64, u64),
+    /// SQL p95, µs.
+    pub sql_p95: (u32, u32),
+}
+
+pub const HEALTH: Health = Health {
+    cpu: (70.0, 90.0),
+    p95: (300_000, 1_000_000),
+    errors: (0.01, 0.05),
+    pool: (0.7, 0.9),
+    memory_growth: (256 << 20, 1 << 30),
+    sql_p95: (50_000, 250_000),
+};
+
+fn grade<T: PartialOrd>(v: T, (warn, err): (T, T)) -> &'static str {
+    if v >= err {
+        "err"
+    } else if v >= warn {
+        "warn"
+    } else {
+        "ok"
+    }
+}
+
+/// The overview's cards: the last 10 seconds as the figure (one quiet second doesn't read as
+/// zero), the last 5 minutes as the sparkline, the color from `HEALTH`.
 pub fn cards(mode: Mode) -> Vec<Card> {
     let (w, _) = latest(Range::M5);
     let last = w.last().copied().unwrap_or_default();
-    // Rates and latencies over the last 10 seconds: one quiet second shouldn't read as zero.
     let recent: Vec<&Sample> = w.iter().rev().take(10).collect();
     let n = recent.len().max(1) as f32;
     let avg = |f: fn(&Sample) -> f32| recent.iter().map(|s| f(s)).sum::<f32>() / n;
     let busy: Vec<&&Sample> = recent.iter().filter(|s| s.req > 0.0).collect();
-    let lat = |f: fn(&Sample) -> u32| {
-        busy.iter()
-            .map(|s| f(s))
-            .max()
-            .map_or_else(|| "–".to_owned(), |v| micros(u64::from(v)))
-    };
+    let peak = |f: fn(&Sample) -> u32| busy.iter().map(|s| f(s)).max();
+    let lat =
+        |f: fn(&Sample) -> u32| peak(f).map_or_else(|| "—".to_owned(), |v| micros(u64::from(v)));
     let series = |f: fn(&Sample) -> f64| charts::sparkline(&w.iter().map(f).collect::<Vec<_>>());
     let b = mode.base;
     let uptime = (Utc::now() - *ui::BOOTED_AT).num_milliseconds();
-    let mut cards = vec![
+    let idle = w.is_empty();
+    let boot_rss = HUB.boot_rss.load(std::sync::atomic::Ordering::Relaxed);
+    let growth = last.rss.saturating_sub(boot_rss);
+    let req = avg(|s| s.req);
+    let e5 = avg(|s| s.e5);
+    let in_use = last.pool_in_use() as f32 / last.pool_max.max(1) as f32;
+    let tone = |t: &'static str| if idle { "idle" } else { t };
+    vec![
         Card {
             key: "memory",
             label: "Memory",
-            value: bytes(last.rss),
-            sub: format!("virtual {}", bytes(last.virt)),
-            tone: "s1",
+            value: if idle { "—".into() } else { bytes(last.rss) },
+            sub: if boot_rss == 0 {
+                "resident".into()
+            } else if last.rss >= boot_rss {
+                format!("+{} since boot", bytes(growth))
+            } else {
+                format!("−{} since boot", bytes(boot_rss - last.rss))
+            },
+            tone: tone(grade(growth, HEALTH.memory_growth)),
             spark: series(|s| s.rss as f64),
             href: format!("{b}/charts#chart-memory"),
         },
         Card {
             key: "cpu",
             label: "CPU",
-            value: format!("{:.0}%", last.cpu),
-            sub: format!("Tokio busy {:.0}%", last.busy),
-            tone: "s2",
+            value: if idle {
+                "—".into()
+            } else {
+                format!("{:.0}%", avg(|s| s.cpu))
+            },
+            sub: format!("Tokio busy {:.0}%", avg(|s| s.busy)),
+            tone: tone(grade(avg(|s| s.cpu), HEALTH.cpu)),
             spark: series(|s| f64::from(s.cpu)),
             href: format!("{b}/charts#chart-cpu"),
         },
         Card {
             key: "req",
             label: "Requests",
-            value: charts::Unit::PerSecond.format(f64::from(avg(|s| s.req))),
+            value: if idle {
+                "—".into()
+            } else {
+                charts::Unit::PerSecond.format(f64::from(req))
+            },
             sub: format!(
                 "{} in 5 min",
                 ui::thousands(w.iter().map(|s| s.req as u64).sum())
             ),
-            tone: "s1",
+            tone: tone("ok"),
             spark: series(|s| f64::from(s.req)),
             href: format!("{b}/requests"),
         },
@@ -347,31 +399,44 @@ pub fn cards(mode: Mode) -> Vec<Card> {
             label: "Latency p95",
             value: lat(|s| s.p95),
             sub: format!("p50 {} · p99 {}", lat(|s| s.p50), lat(|s| s.p99)),
-            tone: "s3",
+            tone: match peak(|s| s.p95) {
+                Some(v) => grade(v, HEALTH.p95),
+                None => "idle",
+            },
             spark: series(|s| f64::from(s.p95)),
             href: format!("{b}/charts#chart-latency"),
         },
         Card {
             key: "errors",
-            label: "Errors",
-            value: charts::Unit::PerSecond.format(f64::from(avg(|s| s.e5 + s.e4))),
+            label: "Server errors",
+            value: if idle {
+                "—".into()
+            } else {
+                charts::Unit::PerSecond.format(f64::from(e5))
+            },
             sub: format!(
-                "{} server · {} client in 5 min",
+                "{} 5xx · {} 4xx in 5 min",
                 w.iter().map(|s| s.e5 as u64).sum::<u64>(),
                 w.iter().map(|s| s.e4 as u64).sum::<u64>()
             ),
-            tone: if w.iter().any(|s| s.e5 > 0.0) {
-                "s4"
+            tone: tone(if req > 0.0 {
+                grade(e5 / req, HEALTH.errors)
+            } else if e5 > 0.0 {
+                "err"
             } else {
-                "s2"
-            },
-            spark: series(|s| f64::from(s.e5 + s.e4)),
+                "ok"
+            }),
+            spark: series(|s| f64::from(s.e5)),
             href: format!("{b}/requests?sort=errors"),
         },
         Card {
             key: "sql",
             label: "SQL",
-            value: charts::Unit::PerSecond.format(f64::from(avg(|s| s.sql))),
+            value: if idle {
+                "—".into()
+            } else {
+                charts::Unit::PerSecond.format(f64::from(avg(|s| s.sql)))
+            },
             sub: format!(
                 "p95 {}",
                 recent
@@ -379,48 +444,58 @@ pub fn cards(mode: Mode) -> Vec<Card> {
                     .map(|s| s.sql_p95)
                     .max()
                     .filter(|v| *v > 0)
-                    .map_or_else(|| "–".to_owned(), |v| micros(u64::from(v)))
+                    .map_or_else(|| "—".to_owned(), |v| micros(u64::from(v)))
             ),
-            tone: "s3",
+            tone: tone(grade(
+                recent.iter().map(|s| s.sql_p95).max().unwrap_or(0),
+                HEALTH.sql_p95,
+            )),
             spark: series(|s| f64::from(s.sql)),
             href: format!("{b}/sql"),
         },
         Card {
             key: "pool",
             label: "DB pool",
-            value: format!("{} / {}", last.pool_in_use(), last.pool_max),
+            value: if idle {
+                "—".into()
+            } else {
+                format!("{} / {}", last.pool_in_use(), last.pool_max)
+            },
             sub: format!("{} open · {} idle", last.pool_size, last.pool_idle),
-            tone: "s2",
+            tone: tone(grade(in_use, HEALTH.pool)),
             spark: series(|s| f64::from(s.pool_in_use())),
             href: format!("{b}/charts#chart-pool"),
         },
         Card {
             key: "tasks",
             label: "Tokio tasks",
-            value: ui::thousands(u64::from(last.tasks)),
+            value: if idle {
+                "—".into()
+            } else {
+                ui::thousands(u64::from(last.tasks))
+            },
             sub: format!("{} workers · queue {}", last.workers, last.queue),
-            tone: "s1",
+            tone: tone(if last.queue > 100 { "warn" } else { "ok" }),
             spark: series(|s| f64::from(s.tasks)),
             href: format!("{b}/charts#chart-tasks"),
         },
-    ];
-    cards.push(Card {
-        key: "uptime",
-        label: "Uptime",
-        value: ui::duration(uptime),
-        sub: match last.fds {
-            Some(n) => format!("{n} open files"),
-            None => "open files: n/a on this OS".into(),
+        Card {
+            key: "uptime",
+            label: "Uptime",
+            value: ui::duration(uptime),
+            sub: match last.fds {
+                Some(n) => format!("{n} open files"),
+                None => "open files: n/a on this OS".into(),
+            },
+            tone: "ok",
+            spark: charts::sparkline(
+                &w.iter()
+                    .filter_map(|s| s.fds.map(f64::from))
+                    .collect::<Vec<_>>(),
+            ),
+            href: format!("{b}/config"),
         },
-        tone: "s2",
-        spark: charts::sparkline(
-            &w.iter()
-                .filter_map(|s| s.fds.map(f64::from))
-                .collect::<Vec<_>>(),
-        ),
-        href: format!("{b}/config"),
-    });
-    cards
+    ]
 }
 
 #[derive(Template)]
@@ -539,12 +614,33 @@ async fn overview(
 // ---------------------------------------------------------------------------------------------
 
 /// Every chart of a range.
-pub fn all_charts(range: Range) -> Vec<ChartView> {
-    let (w, now) = latest(range);
-    let w = charts::downsample(&w, 300);
-    let span = range.seconds();
+/// The charts' window: the last `range` (live), or a zoomed `from`..`to` within the last 24 hours.
+pub fn window(range: Range, from: Option<i64>, to: Option<i64>) -> (Window, bool) {
+    let now = Utc::now().timestamp();
+    let series = lock(&HUB.series);
+    let zoom = match (from, to) {
+        (Some(f), Some(t)) if t - f >= 10 && f >= now - 86_400 && t <= now + 60 => Some((f, t)),
+        _ => None,
+    };
+    let (from, to, samples, live) = match zoom {
+        Some((f, t)) => (f, t, series.between(f, t).0, false),
+        None => (now - range.seconds(), now, series.window(range, now), true),
+    };
+    let w = Window {
+        marks: series.annotations(from, to),
+        demo: series.demo_until.is_some_and(|d| d > from),
+        samples: charts::downsample(&samples, 300),
+        from,
+        to,
+    };
+    (w, live)
+}
+
+/// Every chart of a window.
+pub fn all_charts(win: &Window, live: bool) -> Vec<ChartView> {
+    let w = &win.samples;
     let c = |key, title, unit, series: &[SeriesSpec]| {
-        charts::line_chart(key, title, unit, &w, series, span, now)
+        charts::line_chart(key, title, unit, win, series, live)
     };
     let mut out = vec![
         c(
@@ -685,6 +781,7 @@ pub fn all_charts(range: Range) -> Vec<ChartView> {
 #[template(path = "kernel/dashboard/_charts.html")]
 struct ChartsFragment {
     charts: Vec<ChartView>,
+    heat: Heatmap,
 }
 
 pub struct RangeLink {
@@ -699,13 +796,19 @@ struct ChartsPage {
     chrome: Chrome,
     d: Dash,
     ranges: Vec<RangeLink>,
-    range: &'static str,
+    range: String,
+    zoomed: bool,
+    reset: String,
     charts: Vec<ChartView>,
+    heat: Heatmap,
+    marks: Vec<charts::Mark>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 struct RangeQuery {
     range: Option<String>,
+    from: Option<i64>,
+    to: Option<i64>,
 }
 
 async fn charts_page(
@@ -716,16 +819,42 @@ async fn charts_page(
     flash: Option<Extension<RequestFlash>>,
 ) -> Response {
     let range = Range::parse(q.range.as_deref());
+    let (win, live) = window(range, q.from, q.to);
+    let charts = all_charts(&win, live);
+    let marks = charts
+        .first()
+        .map(|c| {
+            c.marks
+                .iter()
+                .map(|m| charts::Mark {
+                    x: m.x.clone(),
+                    kind: m.kind,
+                    label: m.label.clone(),
+                    when: m.when.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let heat = charts::heatmap(&win, live);
+    let label = if live {
+        format!("last {}", range.label())
+    } else {
+        format!(
+            "{} – {} UTC",
+            chrono::DateTime::from_timestamp(win.from, 0)
+                .map(|d| d.format("%H:%M:%S").to_string())
+                .unwrap_or_default(),
+            chrono::DateTime::from_timestamp(win.to, 0)
+                .map(|d| d.format("%H:%M:%S").to_string())
+                .unwrap_or_default()
+        )
+    };
     ui::page(ChartsPage {
         chrome: chrome(&state, "Charts", "dashboard", flash, theme),
         d: dash(
             mode,
             "/charts",
-            Some(format!(
-                "{}/stream?view=charts&range={}",
-                mode.base,
-                range.key()
-            )),
+            live.then(|| format!("{}/stream?view=charts&range={}", mode.base, range.key())),
             range.refresh(),
         ),
         ranges: Range::ALL
@@ -733,11 +862,15 @@ async fn charts_page(
             .map(|r| RangeLink {
                 label: r.label(),
                 href: format!("{}/charts?range={}", mode.base, r.key()),
-                current: *r == range,
+                current: live && *r == range,
             })
             .collect(),
-        range: range.label(),
-        charts: all_charts(range),
+        range: label,
+        zoomed: !live,
+        reset: format!("{}/charts?range={}", mode.base, range.key()),
+        charts,
+        heat,
+        marks,
     })
 }
 
@@ -896,6 +1029,8 @@ struct TracesQuery {
     route: Option<String>,
     notable: Option<String>,
     status: Option<String>,
+    /// Unix minute: the traces of that minute (a click on a chart).
+    minute: Option<i64>,
 }
 
 fn filtered_traces(q: &TracesQuery) -> Vec<Arc<Trace>> {
@@ -907,6 +1042,10 @@ fn filtered_traces(q: &TracesQuery) -> Vec<Arc<Trace>> {
             q.route
                 .as_deref()
                 .is_none_or(|r| r.is_empty() || t.route == r)
+        })
+        .filter(|t| {
+            q.minute
+                .is_none_or(|m| t.at.timestamp().div_euclid(60) == m)
         })
         .filter(|t| match q.status.as_deref() {
             Some("5xx") => t.status >= 500,
@@ -935,6 +1074,8 @@ struct TracesPage {
     filters: Vec<RangeLink>,
     route: String,
     kept: String,
+    /// "14:05 UTC" when filtered to one minute (a click on a chart).
+    minute: String,
 }
 
 async fn traces_page(
@@ -992,6 +1133,11 @@ async fn traces_page(
         filters,
         route,
         kept: format!("{recent} recent and {notable} notable kept"),
+        minute: q
+            .minute
+            .and_then(|m| chrono::DateTime::from_timestamp(m * 60, 0))
+            .map(|d| d.format("%H:%M UTC").to_string())
+            .unwrap_or_default(),
     })
 }
 
@@ -1486,8 +1632,10 @@ fn fragments(mode: Mode, q: &StreamQuery) -> Vec<(&'static str, String)> {
             }
         }
         Some("charts") => {
+            let (win, live) = window(Range::parse(q.range.as_deref()), None, None);
             if let Ok(h) = (ChartsFragment {
-                charts: all_charts(Range::parse(q.range.as_deref())),
+                charts: all_charts(&win, live),
+                heat: charts::heatmap(&win, live),
             })
             .render()
             {
@@ -1509,6 +1657,7 @@ fn fragments(mode: Mode, q: &StreamQuery) -> Vec<(&'static str, String)> {
                 route: q.route.clone(),
                 notable: q.notable.clone(),
                 status: q.status.clone(),
+                minute: None,
             };
             if let Ok(h) = (TracesFragment {
                 rows: trace_rows(&filtered_traces(&tq)),
@@ -2474,6 +2623,8 @@ async fn config_page(
             .collect()
     };
     env.sort();
+    // WHY: read once; two guards in one expression would deadlock on the same mutex.
+    let latest = lock(&HUB.series).latest();
     let system = vec![
         (
             "OS",
@@ -2491,6 +2642,22 @@ async fn config_page(
                 .unwrap_or_else(|_| "?".into()),
         ),
         ("Host name", "redacted".into()),
+        (
+            "Resident memory",
+            latest.map_or_else(|| "—".into(), |l| bytes(l.rss)),
+        ),
+        (
+            "Virtual memory",
+            latest.map_or_else(
+                || "—".into(),
+                |l| {
+                    format!(
+                        "{} (address space reserved, not used; large on macOS)",
+                        bytes(l.virt)
+                    )
+                },
+            ),
+        ),
         ("Process", format!("pid {}", std::process::id())),
         ("Booted", ui::utc(*ui::BOOTED_AT)),
     ];

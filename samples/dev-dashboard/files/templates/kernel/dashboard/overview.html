@@ -38,7 +38,7 @@
   <section class="panel" aria-labelledby="ov-routes">
     <header><h2 id="ov-routes">Slowest routes</h2><a href="{{ d.base }}/requests?sort=p95">Requests</a></header>
     {% if slow_routes.is_empty() %}<p class="empty">No requests yet.</p>{% else %}
-    <div class="scroll"><table class="data-table"><thead><tr><th scope="col">Route</th><th scope="col" class="num">p95</th><th scope="col" class="num">Hits</th></tr></thead><tbody>
+    <div class="scroll" tabindex="0" role="region" aria-label="Table"><table class="data-table"><thead><tr><th scope="col">Route</th><th scope="col" class="num">p95</th><th scope="col" class="num">Hits</th></tr></thead><tbody>
       {% for r in slow_routes %}<tr><th scope="row"><span class="method m-{{ r.method }}">{{ r.method }}</span> <a class="mono" href="{{ d.base }}/traces?route={{ r.route|urlencode }}">{{ r.route }}</a></th><td class="num">{{ r.p95 }}</td><td class="num">{{ r.count }}</td></tr>{% endfor %}
     </tbody></table></div>{% endif %}
   </section>

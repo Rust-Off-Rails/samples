@@ -1,7 +1,7 @@
 {% if rows.is_empty() %}
 <p class="empty">No traces match. Every request the app serves is traced here (the dashboard's own pages excepted).</p>
 {% else %}
-<div class="scroll"><table class="data-table">
+<div class="scroll" tabindex="0" role="region" aria-label="Table"><table class="data-table">
   <caption class="visually-hidden">Recent requests, newest first</caption>
   <thead><tr><th scope="col">When</th><th scope="col">Request</th><th scope="col">Status</th><th scope="col">Duration</th><th scope="col" class="num">SQL</th></tr></thead>
   <tbody>

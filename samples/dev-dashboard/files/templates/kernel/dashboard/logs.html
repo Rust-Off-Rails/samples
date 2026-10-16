@@ -12,7 +12,7 @@
   <button class="btn">Filter</button>
 </form>
 <p class="hint">Newest first, live over Server-Sent Events. Fields named like passwords, tokens or cookies show as [redacted]. <span data-log-buffered></span></p>
-<ol class="logs" reversed data-logs data-log-stream="{{ stream }}" aria-live="off">
+<ol class="logs" reversed tabindex="0" aria-label="Log lines, newest first" data-logs data-log-stream="{{ stream }}" aria-live="off">
 {% for l in lines %}{% include "kernel/dashboard/_log_row.html" %}
 {% endfor %}
 </ol>

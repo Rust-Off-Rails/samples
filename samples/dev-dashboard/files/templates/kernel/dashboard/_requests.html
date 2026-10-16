@@ -1,7 +1,7 @@
 {% if rows.is_empty() %}
 <p class="empty">No requests yet. Browse the app, or run traffic from the <a href="/dev/dashboard/lab">load lab</a>.</p>
 {% else %}
-<div class="scroll"><table class="data-table">
+<div class="scroll" tabindex="0" role="region" aria-label="Table"><table class="data-table">
   <caption class="visually-hidden">Requests per route</caption>
   <thead><tr><th scope="col">Route</th><th scope="col" class="num">Hits</th><th scope="col" class="num">Errors</th><th scope="col">Status</th><th scope="col" class="num">p50</th><th scope="col">p95</th><th scope="col" class="num">p99</th><th scope="col" class="num">Max</th><th scope="col" class="num">Bytes</th><th scope="col">Last</th><th scope="col">Slowest</th></tr></thead>
   <tbody>

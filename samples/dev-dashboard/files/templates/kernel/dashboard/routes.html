@@ -55,7 +55,7 @@
 <section class="panel" id="not-found" aria-labelledby="nf-title">
   <header><h2 id="nf-title">404s seen</h2><span class="muted">paths that matched no route, with the route they probably meant</span></header>
   {% if not_found.is_empty() %}<p class="empty">None yet. A broken link on a page shows up here with the page it was on.</p>{% else %}
-  <div class="scroll"><table class="data-table"><thead><tr><th scope="col">Path</th><th scope="col" class="num">Count</th><th scope="col">Linked from</th><th scope="col">Did you mean</th><th scope="col">Last</th></tr></thead>
+  <div class="scroll" tabindex="0" role="region" aria-label="Table"><table class="data-table"><thead><tr><th scope="col">Path</th><th scope="col" class="num">Count</th><th scope="col">Linked from</th><th scope="col">Did you mean</th><th scope="col">Last</th></tr></thead>
   <tbody>{% for n in not_found %}<tr><th scope="row" class="mono">{{ n.method }} {{ n.path }}</th><td class="num">{{ n.count }}</td><td class="mono">{% if n.referrer.is_empty() %}<span class="muted">no referrer</span>{% else %}{{ n.referrer }}{% endif %}</td><td class="mono">{% if let Some(m) = n.nearest %}{{ m }}{% else %}<span class="muted">nothing close</span>{% endif %}</td><td class="muted">{{ n.when }}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
 </section>
 {% if !p.overlaps.is_empty() %}

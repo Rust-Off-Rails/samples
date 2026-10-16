@@ -586,6 +586,44 @@ async fn the_collector_feeds_the_charts_and_cards() {
         .assert_text("Tokio tasks");
 }
 
+/// Charts zoom into a range, mark events (a load-lab run, the demo's deploy), carry a heatmap and a
+/// "demo data" badge over synthetic history, and a minute drills into its traces.
+#[tokio::test]
+async fn charts_zoom_annotate_and_drill_into_traces() {
+    let app = dev_app().await;
+    let now = chrono::Utc::now().timestamp();
+    dashboard::demo::backfill(&mut lock(&HUB.series), now);
+    lab::seed(app.db(), 3).await.unwrap();
+    app.get("/dev/lab/orders").await.assert_ok();
+    let charts = app.get("/dev/dashboard/charts?range=1h").await;
+    charts
+        .assert_ok()
+        .assert_text("demo data")
+        .assert_contains("id=\"chart-heatmap\"")
+        .assert_text("deploy v1.4.0 (demo data)")
+        .assert_contains("class=\"mark mark-deploy\"")
+        .assert_contains("data-drill");
+    assert!(
+        !charts.body.contains("req/s <b>0/s"),
+        "legends summarize the window"
+    );
+    let from = now - 600;
+    app.get(&format!("/dev/dashboard/charts?from={from}&to={now}"))
+        .await
+        .assert_ok()
+        .assert_text("Reset zoom")
+        .assert_text("UTC");
+    let minute = now.div_euclid(60);
+    app.get(&format!("/dev/dashboard/traces?minute={minute}"))
+        .await
+        .assert_ok()
+        .assert_text("/dev/lab/orders");
+    app.get(&format!("/dev/dashboard/traces?minute={}", minute - 30))
+        .await
+        .assert_ok()
+        .assert_text("No traces match");
+}
+
 /// The live stream sends a page's fragments as named events.
 #[tokio::test]
 async fn the_live_stream_sends_fragments() {
@@ -1044,6 +1082,9 @@ async fn not_found_paths_keep_the_nearest_route_and_a_safe_referrer() {
     )
     .await
     .assert_status(StatusCode::NOT_FOUND);
+    app.get("/login_links/q8Vw3nRt7yXz2KpL9mBc4HdF6sJa1GeU")
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
     app.get_with_headers(
         "/wp-login.php",
         &[("referer", "https://scanner.example/path?q=1")],
@@ -1056,7 +1097,9 @@ async fn not_found_paths_keep_the_nearest_route_and_a_safe_referrer() {
         .assert_contains("/dev/lab/orders</td>")
         .assert_contains("scanner.example")
         .assert_not_contains("token=abc")
-        .assert_not_contains("q=1");
+        .assert_not_contains("q=1")
+        .assert_not_contains("q8Vw3nRt7yXz2KpL9mBc4HdF6sJa1GeU")
+        .assert_text("/login_links/[redacted]");
     assert_eq!(http::referrer_of("https://x.example/a/b?c=d"), "x.example");
     assert_eq!(
         http::referrer_of("http://localhost:3000/books/1?s=1"),

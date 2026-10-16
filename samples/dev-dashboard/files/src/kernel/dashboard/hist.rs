@@ -92,6 +92,24 @@ impl Hist {
         self.max
     }
 
+    /// Counts per range: values up to `bounds[0]`, up to `bounds[1]`, …, and above the last.
+    pub fn bucket_counts<const N: usize>(&self, bounds: &[u64]) -> [u16; N] {
+        let mut out = [0_u16; N];
+        for (i, c) in self.counts.iter().enumerate() {
+            if *c == 0 {
+                continue;
+            }
+            let v = representative(i).min(self.max);
+            let at = bounds
+                .iter()
+                .position(|b| v <= *b)
+                .unwrap_or(bounds.len())
+                .min(N - 1);
+            out[at] = out[at].saturating_add((*c).min(u32::from(u16::MAX)) as u16);
+        }
+        out
+    }
+
     pub fn merge(&mut self, other: &Hist) {
         for (a, b) in self.counts.iter_mut().zip(other.counts.iter()) {
             *a = a.saturating_add(*b);

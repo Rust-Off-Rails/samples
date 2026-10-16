@@ -656,6 +656,15 @@ pub fn start(state: &AppState, label: &str, plan: Plan) -> Result<Arc<Run>, Stri
     };
     let r = Arc::new(Run::new(label, plan, &target));
     *slot = Some(r.clone());
+    lock(&HUB.series).annotate(super::series::Annotation {
+        t: Utc::now().timestamp(),
+        kind: "lab",
+        label: format!(
+            "load lab: {label}, {} req/s for {} s",
+            r.plan.rps, r.plan.secs
+        ),
+        demo: false,
+    });
     tokio::spawn(run(target, r.clone()));
     Ok(r)
 }

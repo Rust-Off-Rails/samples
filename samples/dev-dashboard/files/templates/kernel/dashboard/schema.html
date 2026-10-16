@@ -9,7 +9,7 @@
 <section class="panel table-card" id="table-{{ t.name }}" aria-labelledby="t-{{ t.name }}">
   <header><h2 id="t-{{ t.name }}" class="mono">{{ t.name }}</h2><span class="muted">{{ t.rows }} rows{% if !t.size.is_empty() %} · {{ t.size }}{% endif %}</span></header>
   {% if !t.unindexed.is_empty() %}<p class="notice-inline">No index on the foreign key{% if t.unindexed.len() > 1 %}s{% endif %} {% for c in t.unindexed %}<code>{{ c }}</code> {% endfor %}: lookups and cascades scan this table.</p>{% endif %}
-  <div class="scroll"><table class="data-table">
+  <div class="scroll" tabindex="0" role="region" aria-label="Table"><table class="data-table">
     <caption class="visually-hidden">Columns of {{ t.name }}</caption>
     <thead><tr><th scope="col">Column</th><th scope="col">Type</th><th scope="col">Null</th><th scope="col">Key</th></tr></thead>
     <tbody>{% for c in t.columns %}<tr><th scope="row" class="mono">{{ c.name }}</th><td class="mono">{{ c.ty }}</td><td>{% if c.nullable %}yes{% else %}<span class="muted">no</span>{% endif %}</td><td>{% if c.pk %}<span class="badge tone-info">primary</span>{% endif %}{% if !t.col_fk[loop.index0].is_empty() %}<span class="badge tone-muted">→ {{ t.col_fk[loop.index0] }}</span>{% endif %}</td></tr>{% endfor %}</tbody>

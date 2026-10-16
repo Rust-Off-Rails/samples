@@ -6,7 +6,7 @@
 //! alternative. Live updates re-render the fragment on the server and `dashboard.js` swaps it in;
 //! the same script adds the hover readout from the `data-` attributes.
 
-use super::series::Sample;
+use super::series::{Annotation, LATENCY_BUCKETS, LATENCY_LABELS, Sample};
 use super::web::{bytes, micros};
 
 /// The plot area inside the SVG's viewBox.
@@ -56,9 +56,19 @@ pub struct Line {
     pub class: &'static str,
     pub d: String,
     pub area: String,
-    pub last: String,
-    /// Comma-separated values for the hover readout.
+    /// The window's summary for the legend: average and peak for rates, the request-weighted
+    /// percentile for latency, now and peak for gauges; "—" without data.
+    pub summary: String,
+    /// Comma-separated values for the readout.
     pub values: String,
+}
+
+/// A vertical marker: a boot, a deploy, a load-lab run, an error burst.
+pub struct Mark {
+    pub x: String,
+    pub kind: &'static str,
+    pub label: String,
+    pub when: String,
 }
 
 /// Everything `_chart.html` needs.
@@ -75,19 +85,34 @@ pub struct ChartView {
     pub grid: Vec<Tick>,
     pub xticks: Vec<Tick>,
     pub lines: Vec<Line>,
+    pub marks: Vec<Mark>,
     pub table_head: Vec<&'static str>,
     pub table: Vec<Vec<String>>,
     pub empty: bool,
-    /// Unix seconds of the first point, and seconds per point (for the readout's time).
-    pub t0: i64,
-    pub step: i64,
+    /// The window drawn (unix seconds), and the time of each point (for the readout and zoom).
+    pub from: i64,
+    pub to: i64,
+    pub times: String,
     pub unit: &'static str,
+    /// Some of it is the demo's synthetic history.
+    pub demo: bool,
+    /// A click on a moment opens the traces of that minute.
+    pub drill: bool,
 }
 
 /// A series to plot: name and one value per sample.
 pub struct SeriesSpec {
     pub name: &'static str,
     pub value: fn(&Sample) -> f64,
+}
+
+/// What the charts of a page draw: a time window with its samples and markers.
+pub struct Window {
+    pub from: i64,
+    pub to: i64,
+    pub samples: Vec<Sample>,
+    pub marks: Vec<Annotation>,
+    pub demo: bool,
 }
 
 /// 1, 2, 2.5 or 5 × 10^k at or above `v`.
@@ -104,7 +129,8 @@ pub fn nice_ceiling(v: f64) -> f64 {
     10.0 * mag
 }
 
-/// At most `max` points, each the largest in its bucket (spikes survive downsampling).
+/// At most `max` points: rates and gauges keep each bucket's largest value (spikes survive),
+/// latency buckets are summed for the heatmap.
 pub fn downsample(samples: &[Sample], max: usize) -> Vec<Sample> {
     if samples.len() <= max || max == 0 {
         return samples.to_vec();
@@ -124,29 +150,91 @@ pub fn downsample(samples: &[Sample], max: usize) -> Vec<Sample> {
             s.p99 = c.iter().map(|x| x.p99).max().unwrap_or(s.p99);
             s.sql = c.iter().map(|x| x.sql).fold(0.0, f32::max);
             s.tasks = c.iter().map(|x| x.tasks).max().unwrap_or(s.tasks);
+            let mut lat = [0_u16; LATENCY_BUCKETS.len() + 1];
+            for x in c {
+                for (a, b) in lat.iter_mut().zip(x.lat.iter()) {
+                    *a = a.saturating_add(*b);
+                }
+            }
+            s.lat = lat;
             Some(s)
         })
         .collect()
 }
 
+/// "now", "-12s", "-5m", "-3h" relative to `to`.
 fn ago(secs: i64) -> String {
     match secs {
         0 => "now".to_owned(),
+        s if s < 120 => format!("-{s}s"),
         s if s < 3_600 => format!("-{}m", s / 60),
         s => format!("-{}h", s / 3_600),
     }
 }
 
-/// A line chart of `series` over `samples` (oldest first), spanning `span` seconds to `now`.
+/// "14:05" or "14:05:30" (UTC) for a zoomed window, which isn't "now"-relative.
+fn clock(t: i64, seconds: bool) -> String {
+    chrono::DateTime::from_timestamp(t, 0)
+        .map(|d| {
+            d.format(if seconds { "%H:%M:%S" } else { "%H:%M" })
+                .to_string()
+        })
+        .unwrap_or_default()
+}
+
+fn label_at(t: i64, w: &Window, live: bool) -> String {
+    if live {
+        ago(w.to - t)
+    } else {
+        clock(t, w.to - w.from < 600)
+    }
+}
+
+/// The legend text of one series over the window.
+fn legend(unit: Unit, samples: &[Sample], value: fn(&Sample) -> f64) -> String {
+    if samples.is_empty() {
+        return "—".to_owned();
+    }
+    let peak = samples.iter().map(value).fold(0.0, f64::max);
+    match unit {
+        Unit::PerSecond => {
+            let avg = samples.iter().map(value).sum::<f64>() / samples.len() as f64;
+            format!("avg {} · peak {}", unit.format(avg), unit.format(peak))
+        }
+        Unit::Micros => {
+            // Weighted by each moment's requests: a quiet second doesn't count as fast.
+            let (sum, weight) =
+                samples
+                    .iter()
+                    .filter(|s| value(s) > 0.0)
+                    .fold((0.0, 0.0), |(a, n), s| {
+                        let w = f64::from(s.req.max(0.01));
+                        (a + value(s) * w, n + w)
+                    });
+            if weight == 0.0 {
+                "—".to_owned()
+            } else {
+                format!("{} · peak {}", unit.format(sum / weight), unit.format(peak))
+            }
+        }
+        _ => {
+            let now = samples.last().map_or(0.0, value);
+            format!("now {} · peak {}", unit.format(now), unit.format(peak))
+        }
+    }
+}
+
+/// A line chart of `series` over the window `w`. `live` windows end now and label time relative
+/// to it; zoomed ones label the clock.
 pub fn line_chart(
     key: &'static str,
     title: &'static str,
     unit: Unit,
-    samples: &[Sample],
+    w: &Window,
     series: &[SeriesSpec],
-    span: i64,
-    now: i64,
+    live: bool,
 ) -> ChartView {
+    let samples = &w.samples;
     let (pw, ph) = (f64::from(W) - LEFT - RIGHT, f64::from(H) - TOP - BOTTOM);
     let max = samples
         .iter()
@@ -159,12 +247,12 @@ pub fn line_chart(
     } else {
         nice_ceiling(max)
     };
-    let start = now - span;
-    let x = |t: i64| LEFT + ((t - start).clamp(0, span) as f64 / span.max(1) as f64) * pw;
+    let span = (w.to - w.from).max(1);
+    let x = |t: i64| LEFT + ((t - w.from).clamp(0, span) as f64 / span as f64) * pw;
     let y = |v: f64| TOP + ph - (v / ymax).clamp(0.0, 1.0) * ph;
-    let grid = (0..=5)
+    let grid = (0..=4)
         .map(|i| {
-            let v = ymax * f64::from(i) / 5.0;
+            let v = ymax * f64::from(i) / 4.0;
             Tick {
                 pos: format!("{:.1}", y(v)),
                 label: unit.format(v),
@@ -173,10 +261,10 @@ pub fn line_chart(
         .collect();
     let xticks = (0..=4)
         .map(|i| {
-            let back = span - span * i / 4;
+            let t = w.from + span * i / 4;
             Tick {
-                pos: format!("{:.1}", x(now - back)),
-                label: ago(back),
+                pos: format!("{:.1}", x(t)),
+                label: label_at(t, w, live),
             }
         })
         .collect();
@@ -205,10 +293,7 @@ pub fn line_chart(
                 class: classes[i % classes.len()],
                 d,
                 area,
-                last: samples
-                    .last()
-                    .map(|s| unit.format((spec.value)(s)))
-                    .unwrap_or_else(|| "–".to_owned()),
+                summary: legend(unit, samples, spec.value),
                 values: samples
                     .iter()
                     .map(|s| format!("{:.2}", (spec.value)(s)))
@@ -217,7 +302,18 @@ pub fn line_chart(
             }
         })
         .collect::<Vec<_>>();
-    // The text alternative: about 12 rows across the range.
+    let marks = w
+        .marks
+        .iter()
+        .filter(|m| m.t >= w.from && m.t <= w.to)
+        .map(|m| Mark {
+            x: format!("{:.1}", x(m.t)),
+            kind: m.kind,
+            label: m.label.clone(),
+            when: label_at(m.t, w, live),
+        })
+        .collect();
+    // The text alternative: about 12 rows across the window, newest first.
     let every = samples.len().div_ceil(12).max(1);
     let table = samples
         .iter()
@@ -225,7 +321,7 @@ pub fn line_chart(
         .step_by(every)
         .take(12)
         .map(|s| {
-            let mut row = vec![ago(now - s.t)];
+            let mut row = vec![label_at(s.t, w, live)];
             row.extend(series.iter().map(|spec| unit.format((spec.value)(s))));
             row
         })
@@ -237,18 +333,7 @@ pub fn line_chart(
     } else {
         let parts: Vec<String> = lines
             .iter()
-            .map(|l| {
-                let peak = samples
-                    .iter()
-                    .map(|s| {
-                        series
-                            .iter()
-                            .find(|sp| sp.name == l.name)
-                            .map_or(0.0, |sp| (sp.value)(s))
-                    })
-                    .fold(0.0, f64::max);
-                format!("{} now {}, peak {}", l.name, l.last, unit.format(peak))
-            })
+            .map(|l| format!("{} {}", l.name, l.summary))
             .collect();
         format!("{title}: {}", parts.join("; "))
     };
@@ -265,14 +350,17 @@ pub fn line_chart(
         grid,
         xticks,
         lines,
+        marks,
         table_head,
         table,
         empty: samples.is_empty(),
-        t0: samples.first().map_or(now, |s| s.t),
-        step: samples
-            .get(1)
-            .zip(samples.first())
-            .map_or(1, |(b, a)| (b.t - a.t).max(1)),
+        from: w.from,
+        to: w.to,
+        times: samples
+            .iter()
+            .map(|s| s.t.to_string())
+            .collect::<Vec<_>>()
+            .join(","),
         unit: match unit {
             Unit::Bytes => "bytes",
             Unit::Percent => "percent",
@@ -280,6 +368,107 @@ pub fn line_chart(
             Unit::Micros => "micros",
             Unit::Count => "count",
         },
+        demo: w.demo,
+        drill: matches!(key, "req" | "latency" | "errors"),
+    }
+}
+
+/// One cell of the latency heatmap.
+pub struct Cell {
+    pub x: String,
+    pub y: String,
+    pub w: String,
+    pub h: String,
+    /// 1..=6, the share of that moment's requests (0 is not drawn).
+    pub level: u8,
+    pub title: String,
+}
+
+/// The latency heatmap: time × latency bucket, each cell's shade the share of that moment's
+/// requests, under the percentile lines.
+pub struct Heatmap {
+    pub cells: Vec<Cell>,
+    pub rows: Vec<Tick>,
+    pub xticks: Vec<Tick>,
+    pub table_head: Vec<&'static str>,
+    pub table: Vec<Vec<String>>,
+    pub empty: bool,
+    pub demo: bool,
+}
+
+pub fn heatmap(w: &Window, live: bool) -> Heatmap {
+    let cols = downsample(&w.samples, 60);
+    let buckets = LATENCY_BUCKETS.len() + 1;
+    let (pw, ph) = (f64::from(W) - LEFT - RIGHT, 132.0);
+    let cw = pw / cols.len().max(1) as f64;
+    let rh = ph / buckets as f64;
+    let mut cells = Vec::new();
+    for (i, s) in cols.iter().enumerate() {
+        let total: u32 = s.lat.iter().map(|c| u32::from(*c)).sum();
+        if total == 0 {
+            continue;
+        }
+        for (b, c) in s.lat.iter().enumerate() {
+            if *c == 0 {
+                continue;
+            }
+            let share = f64::from(*c) / f64::from(total);
+            let level = ((share.sqrt() * 6.0).ceil() as u8).clamp(1, 6);
+            cells.push(Cell {
+                x: format!("{:.1}", LEFT + i as f64 * cw),
+                y: format!("{:.1}", TOP + ph - (b + 1) as f64 * rh),
+                w: format!("{:.1}", (cw - 1.0).max(1.0)),
+                h: format!("{:.1}", rh - 1.0),
+                level,
+                title: format!(
+                    "{}: {} of {} requests {}",
+                    label_at(s.t, w, live),
+                    c,
+                    total,
+                    LATENCY_LABELS[b]
+                ),
+            });
+        }
+    }
+    let rows = [0, 2, 4, 6, 8, 10]
+        .iter()
+        .map(|b| Tick {
+            pos: format!("{:.1}", TOP + ph - (*b as f64 + 0.5) * rh + 3.0),
+            label: LATENCY_LABELS[*b].to_owned(),
+        })
+        .collect();
+    let span = (w.to - w.from).max(1);
+    let xticks = (0..=4)
+        .map(|i| {
+            let t = w.from + span * i / 4;
+            Tick {
+                pos: format!("{:.1}", LEFT + (span * i / 4) as f64 / span as f64 * pw),
+                label: label_at(t, w, live),
+            }
+        })
+        .collect();
+    let mut table_head = vec!["When"];
+    table_head.extend(LATENCY_LABELS);
+    let every = cols.len().div_ceil(10).max(1);
+    let table = cols
+        .iter()
+        .rev()
+        .step_by(every)
+        .take(10)
+        .map(|s| {
+            let mut row = vec![label_at(s.t, w, live)];
+            row.extend(s.lat.iter().map(|c| c.to_string()));
+            row
+        })
+        .collect();
+    Heatmap {
+        empty: cells.is_empty(),
+        cells,
+        rows,
+        xticks,
+        table_head,
+        table,
+        demo: w.demo,
     }
 }
 
@@ -372,20 +561,36 @@ mod tests {
                 ..Sample::default()
             })
             .collect();
+        let w = Window {
+            from: 1_000,
+            to: 1_060,
+            samples: samples.clone(),
+            marks: vec![Annotation {
+                t: 1_030,
+                kind: "boot",
+                label: "server started".into(),
+                demo: false,
+            }],
+            demo: false,
+        };
         let c = line_chart(
             "req",
             "Requests",
             Unit::PerSecond,
-            &samples,
+            &w,
             &[SeriesSpec {
                 name: "req/s",
                 value: |s| f64::from(s.req),
             }],
-            60,
-            1_060,
+            true,
         );
         assert!(!c.empty);
-        assert!(c.summary.contains("req/s now"), "{}", c.summary);
+        assert!(
+            c.summary.contains("req/s avg 2.9/s · peak 6.0/s"),
+            "{}",
+            c.summary
+        );
+        assert_eq!(c.marks.len(), 1);
         assert!(c.table.len() <= 12 && !c.table.is_empty());
         assert_eq!(c.table_head, ["When", "req/s"]);
         for num in c.lines[0]
@@ -397,5 +602,47 @@ mod tests {
             assert!((0.0..=f64::from(W)).contains(&v), "{v}");
         }
         assert_eq!(downsample(&samples, 10).len(), 10);
+        let empty = Window {
+            samples: Vec::new(),
+            ..w
+        };
+        let quiet = line_chart(
+            "latency",
+            "Latency",
+            Unit::Micros,
+            &empty,
+            &[SeriesSpec {
+                name: "p95",
+                value: |s| f64::from(s.p95),
+            }],
+            true,
+        );
+        assert_eq!(
+            quiet.lines[0].summary, "—",
+            "no data reads as a dash, never 0µs"
+        );
+    }
+
+    #[test]
+    fn the_latency_heatmap_shades_each_moment() {
+        let mut s = Sample {
+            t: 10,
+            req: 4.0,
+            ..Sample::default()
+        };
+        s.lat[0] = 3;
+        s.lat[7] = 1;
+        let w = Window {
+            from: 0,
+            to: 20,
+            samples: vec![s],
+            marks: Vec::new(),
+            demo: true,
+        };
+        let h = heatmap(&w, true);
+        assert_eq!(h.cells.len(), 2);
+        assert!(h.cells[0].level > h.cells[1].level);
+        assert!(h.demo && !h.empty);
+        assert_eq!(h.table[0][1], "3");
     }
 }

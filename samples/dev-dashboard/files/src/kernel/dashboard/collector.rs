@@ -13,7 +13,7 @@ use chrono::Utc;
 use sea_orm::{DatabaseConnection, DbBackend};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
-use super::series::Sample;
+use super::series::{Annotation, LATENCY_BUCKETS, Sample};
 use super::{HUB, Tick, lock};
 use crate::state::AppState;
 
@@ -80,7 +80,11 @@ pub fn unstable() -> Option<Unstable> {
     None
 }
 
+/// Server errors per second that mark an error burst on the charts.
+pub const ERROR_BURST: f32 = 3.0; // APP: your app's "something is on fire" rate
+
 pub struct Collector {
+    burst: bool,
     sys: System,
     pid: Option<Pid>,
     busy: Duration,
@@ -96,6 +100,7 @@ impl Default for Collector {
 impl Collector {
     pub fn new() -> Self {
         let mut c = Self {
+            burst: false,
             sys: System::new(),
             pid: sysinfo::get_current_pid().ok(),
             busy: Duration::ZERO,
@@ -158,13 +163,29 @@ impl Collector {
             p99: tick.latency.quantile(0.99) as u32,
             sql: tick.statements as f32 / secs,
             sql_p95: tick.sql_latency.quantile(0.95) as u32,
+            lat: tick.latency.bucket_counts(&LATENCY_BUCKETS),
         };
         (sample, tick)
     }
 
     /// Adds a sample to the rings.
     pub fn commit(&mut self, (sample, tick): (Sample, Tick)) {
-        lock(&HUB.series).push(sample, &tick.latency, &tick.sql_latency);
+        if HUB.boot_rss.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+            HUB.boot_rss
+                .store(sample.rss, std::sync::atomic::Ordering::Relaxed);
+        }
+        let mut series = lock(&HUB.series);
+        let burst = sample.e5 >= ERROR_BURST;
+        if burst && !self.burst {
+            series.annotate(Annotation {
+                t: sample.t,
+                kind: "errors",
+                label: format!("error burst ({:.0} server errors/s)", sample.e5),
+                demo: false,
+            });
+        }
+        self.burst = burst;
+        series.push(sample, &tick.latency, &tick.sql_latency);
     }
 }
 

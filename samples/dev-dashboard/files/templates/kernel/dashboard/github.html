@@ -19,7 +19,7 @@
   <section class="panel" aria-labelledby="gh-trend"><header><h2 id="gh-trend">Success rate by day</h2><span class="muted">completed runs</span></header>
     {% if trend.is_empty() %}<p class="empty">No completed runs.</p>{% else %}
     <svg class="bars" viewBox="0 0 600 120" role="img" aria-label="CI success rate per day, oldest to newest" focusable="false">{% for b in trend %}<rect class="b-{{ b.class }}" x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}" rx="2"><title>{{ b.label }}</title></rect>{% endfor %}</svg>
-    <details class="data pad"><summary>Data table</summary><div class="scroll"><table><thead><tr><th scope="col">Day</th><th scope="col">Runs</th><th scope="col">Passed</th></tr></thead><tbody>{% for d in g.days %}<tr><td class="mono">{{ d.date }}</td><td>{{ d.runs }}</td><td>{{ d.success }}</td></tr>{% endfor %}</tbody></table></div></details>{% endif %}
+    <details class="data pad"><summary>Data table</summary><div class="scroll" tabindex="0" role="region" aria-label="Table"><table><thead><tr><th scope="col">Day</th><th scope="col">Runs</th><th scope="col">Passed</th></tr></thead><tbody>{% for d in g.days %}<tr><td class="mono">{{ d.date }}</td><td>{{ d.runs }}</td><td>{{ d.success }}</td></tr>{% endfor %}</tbody></table></div></details>{% endif %}
   </section>
   <section class="panel" aria-labelledby="gh-repo"><header><h2 id="gh-repo">Repository</h2></header>
     <dl class="kv"><dt>Description</dt><dd>{% if g.description.is_empty() %}<span class="muted">none</span>{% else %}{{ g.description }}{% endif %}</dd><dt>Default branch</dt><dd class="mono">{{ g.default_branch }}</dd><dt>Stars</dt><dd>{{ g.stars }}</dd><dt>API</dt><dd>{% if g.token %}with a token{% else %}anonymous{% endif %}{% if !rate.is_empty() %} · {{ rate }}{% endif %}</dd></dl>
@@ -27,7 +27,7 @@
 </div>
 <section class="panel" aria-labelledby="gh-runs"><header><h2 id="gh-runs">Latest workflow runs</h2></header>
   {% if g.runs.is_empty() %}<p class="empty">No workflow runs (or GitHub couldn't be asked).</p>{% else %}
-  <div class="scroll"><table class="data-table"><thead><tr><th scope="col">Run</th><th scope="col">Status</th><th scope="col">Branch</th><th scope="col">Commit</th><th scope="col">Duration</th><th scope="col">When</th></tr></thead>
+  <div class="scroll" tabindex="0" role="region" aria-label="Table"><table class="data-table"><thead><tr><th scope="col">Run</th><th scope="col">Status</th><th scope="col">Branch</th><th scope="col">Commit</th><th scope="col">Duration</th><th scope="col">When</th></tr></thead>
   <tbody>{% for r in g.runs %}<tr><th scope="row">{% if let Some(h) = r.href %}<a href="{{ h }}" rel="noopener noreferrer">{{ r.name }} #{{ r.number }}</a>{% else %}{{ r.name }} #{{ r.number }}{% endif %}<span class="sub">{{ r.title }}</span></th><td><span class="badge tone-{{ r.tone }}">{{ r.status }}</span></td><td class="mono">{{ r.branch }}</td><td class="mono">{{ r.sha }} <span class="muted">{{ r.event }}</span></td><td class="nowrap">{{ r.duration }}</td><td class="muted nowrap">{{ r.when }}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
 </section>
 {% if g.fixture %}<p class="hint">Showing recorded fixture data (<code>DASHBOARD_GITHUB_FIXTURE</code>), not the network.</p>{% endif %}

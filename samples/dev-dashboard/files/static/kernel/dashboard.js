@@ -137,7 +137,11 @@
     }
   }
 
-  // ---- chart readout: hover a chart to read every series at that moment -------------------------
+  // ---- charts: crosshair, synchronized cursors, readout, drag-to-zoom, drill into traces --------
+  // Every chart on a page shares one cursor time; the chart under the pointer (or with focus)
+  // shows the readout. Drag (or Shift+arrows) selects a range to zoom into; a click (or Enter)
+  // on Requests, Latency or Errors opens that minute's traces. Colors come from CSS, so a theme
+  // change (the host's `themechange` event) needs no redraw.
   const units = {
     bytes: (v) => (v >= 1073741824 ? `${(v / 1073741824).toFixed(1)} GB` : v >= 1048576 ? `${(v / 1048576).toFixed(1)} MB` : v >= 1024 ? `${(v / 1024).toFixed(1)} KB` : `${Math.round(v)} B`),
     percent: (v) => `${Math.round(v)}%`,
@@ -145,52 +149,198 @@
     micros: (v) => (v >= 1e6 ? `${(v / 1e6).toFixed(2)}s` : v >= 1000 ? `${(v / 1000).toFixed(1)}ms` : `${Math.round(v)}µs`),
     count: (v) => `${Math.round(v)}`,
   };
-  function bindCharts(scope) {
-    scope.querySelectorAll("[data-chart]").forEach((fig) => {
-      const wrap = fig.querySelector(".plot-wrap");
-      const svg = fig.querySelector("svg.plot");
-      if (!wrap || !svg || wrap.dataset.bound) return;
-      wrap.dataset.bound = "1";
-      const lines = [...svg.querySelectorAll("path.line")].map((p) => ({
+  const charts = [];
+  let cursorT = null;
+  const base = () => document.querySelector("[data-dashboard]")?.dataset.base || "/dev/dashboard";
+  const clock = (t) => new Date(t * 1000).toISOString().slice(11, 19);
+
+  function model(fig) {
+    const svg = fig.querySelector("svg.plot");
+    const times = (fig.dataset.times || "").split(",").filter(Boolean).map(Number);
+    return {
+      fig,
+      svg,
+      wrap: fig.querySelector(".plot-wrap"),
+      times,
+      from: Number(fig.dataset.from),
+      to: Number(fig.dataset.to),
+      x0: Number(svg.dataset.x0),
+      x1: Number(svg.dataset.x1),
+      fmt: units[fig.dataset.unit] || units.count,
+      drill: fig.hasAttribute("data-drill"),
+      lines: [...svg.querySelectorAll("path.line")].map((p) => ({
         name: p.dataset.name,
         cls: [...p.classList].find((c) => /^s\d$/.test(c)),
         values: (p.dataset.values || "").split(",").filter(Boolean).map(Number),
-      }));
-      const fmt = units[fig.dataset.unit] || units.count;
-      const t0 = Number(fig.dataset.t0);
-      const step = Number(fig.dataset.step) || 1;
-      const tip = document.createElement("div");
-      tip.className = "readout";
-      tip.hidden = true;
-      tip.setAttribute("aria-hidden", "true");
-      wrap.appendChild(tip);
-      wrap.addEventListener("pointermove", (e) => {
-        const n = lines[0]?.values.length || 0;
-        if (!n) return;
-        const box = svg.getBoundingClientRect();
-        const vb = svg.viewBox.baseVal;
-        const left = (52 / vb.width) * box.width;
-        const right = box.width - (8 / vb.width) * box.width;
-        const x = Math.min(Math.max(e.clientX - box.left, left), right);
-        const i = Math.round(((x - left) / Math.max(right - left, 1)) * (n - 1));
-        const ago = Math.max(0, Math.round(Date.now() / 1000 - (t0 + i * step)));
-        tip.textContent = "";
-        const head = document.createElement("div");
-        head.textContent = ago < 2 ? "now" : ago < 120 ? `${ago}s ago` : `${Math.round(ago / 60)}m ago`;
-        tip.appendChild(head);
-        lines.forEach((l) => {
-          const row = document.createElement("div");
-          row.textContent = `${l.name}: ${fmt(l.values[i] ?? 0)}`;
-          tip.appendChild(row);
-        });
-        tip.hidden = false;
-        const w = tip.offsetWidth;
-        tip.style.left = `${Math.min(Math.max(x - w / 2, 0), box.width - w)}px`;
+      })),
+      cursor: svg.querySelector(".cursor"),
+      sel: svg.querySelector(".selection"),
+      tip: null,
+      anchor: null,
+    };
+  }
+  const xOf = (c, t) => c.x0 + ((t - c.from) / Math.max(c.to - c.from, 1)) * (c.x1 - c.x0);
+  const tOf = (c, vx) => c.from + ((Math.min(Math.max(vx, c.x0), c.x1) - c.x0) / (c.x1 - c.x0)) * (c.to - c.from);
+  const nearest = (c, t) => {
+    let best = -1;
+    let d = Infinity;
+    c.times.forEach((x, i) => {
+      if (Math.abs(x - t) < d) { d = Math.abs(x - t); best = i; }
+    });
+    return best;
+  };
+  const vxOf = (c, e) => {
+    const box = c.svg.getBoundingClientRect();
+    return ((e.clientX - box.left) / box.width) * c.svg.viewBox.baseVal.width;
+  };
+
+  function readout(c, i) {
+    if (!c.tip) {
+      c.tip = document.createElement("div");
+      c.tip.className = "readout";
+      c.tip.setAttribute("aria-hidden", "true");
+      c.wrap.appendChild(c.tip);
+    }
+    c.tip.textContent = "";
+    const head = document.createElement("div");
+    head.className = "when";
+    head.textContent = `${clock(c.times[i])} UTC`;
+    c.tip.appendChild(head);
+    c.lines.forEach((l) => {
+      const row = document.createElement("div");
+      const sw = document.createElement("span");
+      sw.className = `sw ${l.cls}`;
+      row.appendChild(sw);
+      row.appendChild(document.createTextNode(`${l.name} ${c.fmt(l.values[i] ?? 0)}`));
+      c.tip.appendChild(row);
+    });
+    if (c.drill) {
+      const hint = document.createElement("div");
+      hint.className = "hint-line";
+      hint.textContent = "click: this minute's traces";
+      c.tip.appendChild(hint);
+    }
+    c.tip.hidden = false;
+    const box = c.svg.getBoundingClientRect();
+    const px = ((xOf(c, c.times[i]) / c.svg.viewBox.baseVal.width) * box.width);
+    const w = c.tip.offsetWidth;
+    c.tip.style.left = `${Math.min(Math.max(px + 12, 0), box.width - w)}px`;
+  }
+
+  // Moves every chart's cursor to time `t`; `active` (the chart in use) shows the readout.
+  function sync(t, active) {
+    cursorT = t;
+    charts.forEach((c) => {
+      if (!c.cursor) return;
+      if (t === null || !c.times.length) {
+        c.cursor.setAttribute("hidden", "");
+        if (c.tip) c.tip.hidden = true;
+        return;
+      }
+      const i = nearest(c, t);
+      const x = xOf(c, c.times[i]).toFixed(1);
+      c.cursor.setAttribute("x1", x);
+      c.cursor.setAttribute("x2", x);
+      c.cursor.removeAttribute("hidden");
+      if (c === active) readout(c, i);
+      else if (c.tip) c.tip.hidden = true;
+    });
+  }
+
+  function select(c, t1, t2) {
+    if (!c.sel) return;
+    if (t1 === null) {
+      c.sel.setAttribute("hidden", "");
+      return;
+    }
+    const a = xOf(c, Math.min(t1, t2));
+    const b = xOf(c, Math.max(t1, t2));
+    c.sel.setAttribute("x", a.toFixed(1));
+    c.sel.setAttribute("width", Math.max(b - a, 1).toFixed(1));
+    c.sel.removeAttribute("hidden");
+  }
+
+  function zoom(t1, t2) {
+    const from = Math.floor(Math.min(t1, t2));
+    const to = Math.ceil(Math.max(t1, t2));
+    if (to - from < 10) return false;
+    window.location.assign(`${base()}/charts?from=${from}&to=${to}`);
+    return true;
+  }
+  function drill(c, t) {
+    if (!c.drill) return;
+    window.location.assign(`${base()}/traces?minute=${Math.floor(t / 60)}`);
+  }
+
+  function bindCharts(scope) {
+    // Charts inside a swapped fragment are new elements: forget the old ones.
+    for (let i = charts.length - 1; i >= 0; i--) {
+      if (!document.contains(charts[i].fig)) charts.splice(i, 1);
+    }
+    scope.querySelectorAll("[data-chart]").forEach((fig) => {
+      if (fig.dataset.bound) return;
+      fig.dataset.bound = "1";
+      const c = model(fig);
+      if (!c.wrap || !c.svg) return;
+      charts.push(c);
+      let down = null;
+      c.wrap.addEventListener("pointermove", (e) => {
+        if (!c.times.length) return;
+        const t = tOf(c, vxOf(c, e));
+        sync(t, c);
+        if (down !== null) select(c, down, t);
       });
-      wrap.addEventListener("pointerleave", () => {
-        tip.hidden = true;
+      c.wrap.addEventListener("pointerleave", () => {
+        if (down === null) sync(null, null);
+      });
+      c.wrap.addEventListener("pointerdown", (e) => {
+        if (!c.times.length || e.button !== 0) return;
+        down = tOf(c, vxOf(c, e));
+        c.wrap.setPointerCapture(e.pointerId);
+      });
+      c.wrap.addEventListener("pointerup", (e) => {
+        if (down === null) return;
+        const t = tOf(c, vxOf(c, e));
+        const start = down;
+        down = null;
+        select(c, null);
+        const dx = Math.abs(xOf(c, t) - xOf(c, start)) / (c.x1 - c.x0) * c.svg.getBoundingClientRect().width;
+        if (dx > 6) zoom(start, t);
+        else drill(c, c.times[nearest(c, t)]);
+      });
+      c.wrap.addEventListener("focus", () => {
+        if (!c.times.length) return;
+        sync(cursorT ?? c.times[c.times.length - 1], c);
+      });
+      c.wrap.addEventListener("blur", () => {
+        if (c.tip) c.tip.hidden = true;
+      });
+      c.wrap.addEventListener("keydown", (e) => {
+        if (!c.times.length) return;
+        let i = nearest(c, cursorT ?? c.times[c.times.length - 1]);
+        const step = e.ctrlKey || e.metaKey ? 10 : 1;
+        if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End") {
+          e.preventDefault();
+          if (e.shiftKey && c.anchor === null) c.anchor = c.times[i];
+          if (e.key === "ArrowLeft") i = Math.max(0, i - step);
+          if (e.key === "ArrowRight") i = Math.min(c.times.length - 1, i + step);
+          if (e.key === "Home") i = 0;
+          if (e.key === "End") i = c.times.length - 1;
+          if (!e.shiftKey) c.anchor = null;
+          sync(c.times[i], c);
+          select(c, c.anchor, c.times[i]);
+        } else if (e.key === "Enter") {
+          e.preventDefault();
+          if (c.anchor !== null && zoom(c.anchor, c.times[i])) return;
+          drill(c, c.times[i]);
+        } else if (e.key === "Escape") {
+          c.anchor = null;
+          select(c, null);
+          sync(null, null);
+        }
       });
     });
+    if (cursorT !== null) sync(cursorT, null);
   }
   bindCharts(document);
 })();
