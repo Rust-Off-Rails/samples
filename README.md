@@ -10,12 +10,13 @@ Every sample follows the framework's conventions exactly (stack, layout, naming,
 |--------|-----------|--------|------|
 | [mailer](samples/mailer/) | — | ready | Templated HTML + text email; SMTP, dev mailbox storage, log and memory adapters; previews; a test-email task; header-injection checks |
 | [dev-mailbox](samples/dev-mailbox/) | mailer | ready | `/dev/mailbox`: live inbox, sandboxed HTML viewer with width and dark previews, codes and links with copy, attachments, checks, search, keyboard, JSON and a CLI. Development only |
-| jobs | — | planned | A database-backed job queue: `SKIP LOCKED` on Postgres, retries with backoff, unique and scheduled jobs, cron |
-| jobs-dashboard | jobs | planned | `/admin/jobs`: queues, states, job detail, retry/cancel, live refresh; admin only |
-| auth-password | mailer | planned | Email + password: argon2id, verification, reset, rate limits, no user enumeration |
-| auth-magic-link | mailer | planned | Passwordless sign-in with single-use, hashed, short-lived tokens |
-| auth-totp | an auth sample | planned | TOTP two-factor with recovery codes and replay protection |
-| realtime | an auth sample | planned | Channels over WebSocket with topic authorization, presence and SSE fallback |
+| [jobs](samples/jobs/) | — | ready | A database-backed job queue: `SKIP LOCKED` on Postgres, retries with backoff, unique and scheduled jobs, cron |
+| [jobs-dashboard](samples/jobs-dashboard/) | jobs | ready | `/admin/jobs`: queues, states, job detail, errors grouped by root cause, retry/cancel, live refresh; admin only |
+| [auth-core](samples/auth-core/) | mailer, dev-mailbox | ready | Users, database sessions with rotation and revocation, the account security page, re-auth, email change, security emails, audit trail, throttling |
+| [auth-password](samples/auth-password/) | auth-core | ready | Email + password: argon2id, verification, reset, rate limits, no user enumeration |
+| [auth-magic-link](samples/auth-magic-link/) | auth-core | ready | Passwordless sign-in with single-use, hashed, short-lived tokens or codes |
+| [auth-totp](samples/auth-totp/) | auth-core | ready | TOTP two-factor with recovery codes, trusted devices and replay protection |
+| [realtime](samples/realtime/) | — (accounts with auth-core) | ready | Channels over WebSocket with topic authorization, presence and SSE/long-poll fallbacks; development guests alone, auth-core accounts when installed |
 
 Screenshots of every screen, light and dark, desktop and mobile, are in [`docs/screenshots/`](docs/screenshots/).
 
