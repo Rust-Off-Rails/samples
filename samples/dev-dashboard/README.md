@@ -2,8 +2,8 @@
 
 Everything your app is doing, live, at **`/dev/dashboard`**: memory, CPU, requests per second, p50/p95/p99 latency, errors, the database pool and Tokio, as charts; every route with its numbers; every request as a trace waterfall; every SQL statement by fingerprint, with N+1 detection and EXPLAIN; the live log; an app doctor that turns all of it into ranked findings; a routes explorer that spots broken links and missing gates; the schema; your test runs on SQLite and Postgres; your CI; and a load lab to make the numbers move. Phoenix has LiveDashboard and Rails has rack-mini-profiler plus a handful of gems; this is one sample, in-process, with no Prometheus, Grafana or Jaeger to run. No dependency on other samples. Extracted from Rust off Rails apps.
 
-- **Overview**: cards with sparklines (memory, CPU, req/s, latency, errors, SQL, pool, Tokio, uptime), the top insights, the slowest routes and queries, the latest traces and N+1s, and panels from other samples (the job queue when `jobs` is installed).
-- **Charts**: ten live charts (SVG, light and dark), 5 min, 15 min, 1 h or 24 h, a hover readout, and a data table under each one as its text alternative.
+- **Overview**: cards with sparklines, colored by health (green, amber, red; thresholds are `HEALTH`, `// APP:`): memory (and its growth since boot), CPU, req/s, latency, server errors, SQL, pool, Tokio, uptime; the top insights, the slowest routes and queries, the latest traces and N+1s, and panels from other samples (the job queue when `jobs` is installed).
+- **Charts**: ten live charts and a latency heatmap (SVG, light and dark, gradient fills), 5 min, 15 min, 1 h or 24 h. Legends summarize the visible window (average and peak for rates, request-weighted percentiles for latency, "—" without data). A crosshair synchronized across every chart with a readout of all series; drag (or Shift+arrows) to zoom into a range; click Requests, Latency or Errors to open that minute's traces; markers for boots, load-lab runs and error bursts. All of it works from the keyboard, and every chart keeps a data table as its text alternative.
 - **Requests**: per matched route: hits, 2xx/3xx/4xx/5xx, p50/p95/p99/max, bytes, last hit, the slowest examples (each a trace).
 - **Traces**: every request (the latest 300, plus the notable ones: a 5xx, an N+1, slower than 0.5 s) as a waterfall of its spans, SQL and events, linked to its queries. An `APP:` hook shows where an OpenTelemetry exporter plugs in.
 - **SQL**: statements grouped by fingerprint (literals stripped): count, total, mean, p95, max, last seen, the routes that ran it, parameters as type and length only. The **N+1** list (the same statement more than 5 times in one request) with route and trace. **Writes during a GET.** **EXPLAIN** (SQLite `EXPLAIN QUERY PLAN`, Postgres `EXPLAIN`) for recorded SELECTs.
@@ -28,6 +28,7 @@ Guides: [`.offrails/guides/dev-tools.md`](https://rustoffrails.org/docs/dev-tool
 | Screen | Light | Dark |
 |--------|-------|------|
 | Overview | [desktop](../../docs/screenshots/dev-dashboard/overview-light-desktop.png) · [mobile](../../docs/screenshots/dev-dashboard/overview-light-mobile.png) | [desktop](../../docs/screenshots/dev-dashboard/overview-dark-desktop.png) · [mobile](../../docs/screenshots/dev-dashboard/overview-dark-mobile.png) |
+| Chart readout (crosshair on every chart) | [desktop](../../docs/screenshots/dev-dashboard/charts-readout-light-desktop.png) · [mobile](../../docs/screenshots/dev-dashboard/charts-readout-light-mobile.png) | [desktop](../../docs/screenshots/dev-dashboard/charts-readout-dark-desktop.png) · [mobile](../../docs/screenshots/dev-dashboard/charts-readout-dark-mobile.png) |
 | Charts | [desktop](../../docs/screenshots/dev-dashboard/charts-light-desktop.png) · [mobile](../../docs/screenshots/dev-dashboard/charts-light-mobile.png) | [desktop](../../docs/screenshots/dev-dashboard/charts-dark-desktop.png) · [mobile](../../docs/screenshots/dev-dashboard/charts-dark-mobile.png) |
 | Insights | [desktop](../../docs/screenshots/dev-dashboard/insights-light-desktop.png) · [mobile](../../docs/screenshots/dev-dashboard/insights-light-mobile.png) | [desktop](../../docs/screenshots/dev-dashboard/insights-dark-desktop.png) · [mobile](../../docs/screenshots/dev-dashboard/insights-dark-mobile.png) |
 | Requests | [desktop](../../docs/screenshots/dev-dashboard/requests-light-desktop.png) · [mobile](../../docs/screenshots/dev-dashboard/requests-light-mobile.png) | [desktop](../../docs/screenshots/dev-dashboard/requests-dark-desktop.png) · [mobile](../../docs/screenshots/dev-dashboard/requests-dark-mobile.png) |
@@ -45,7 +46,7 @@ Guides: [`.offrails/guides/dev-tools.md`](https://rustoffrails.org/docs/dev-tool
 | Config | [desktop](../../docs/screenshots/dev-dashboard/config-light-desktop.png) · [mobile](../../docs/screenshots/dev-dashboard/config-light-mobile.png) | [desktop](../../docs/screenshots/dev-dashboard/config-dark-desktop.png) · [mobile](../../docs/screenshots/dev-dashboard/config-dark-mobile.png) |
 | Forced dark on a light system | [desktop](../../docs/screenshots/dev-dashboard/forced-dark-light-desktop.png) · [mobile](../../docs/screenshots/dev-dashboard/forced-dark-light-mobile.png) | |
 
-All data in them is synthetic: fake orders, `example.com` customers, a fixture repository `example-org/example-app`, synthetic test runs; the host name is redacted.
+All data in them is synthetic: the hour of demo history (badged "demo data"), fake orders, `example.com` customers, a fixture repository `example-org/example-app`, synthetic test runs; the host name is redacted.
 
 ## Install
 
@@ -72,7 +73,7 @@ Through the samples MCP server: `get_sample dev-dashboard`. Or by hand, in the a
 
 ## After installing
 
-- Open `/dev/dashboard/lab`, press **N+1**, and follow the link: that is the tour. `cargo run -- dashboard demo` adds fake orders and a history of synthetic test runs; `cargo run -- dashboard warmup --url http://localhost:3000` drives a minute of mixed traffic and every scenario.
+- Open `/dev/dashboard/lab`, press **N+1**, and follow the link: that is the tour. For a demo, `DASHBOARD_DEMO_HISTORY=true` in `.env` fills the last hour with synthetic history at boot (traffic that swells, a deploy, a spike, an incident), every chart over it badged "demo data"; the real collector takes over from the first second. `cargo run -- dashboard demo` adds fake orders and a history of synthetic test runs; `cargo run -- dashboard warmup --url http://localhost:3000` drives a minute of mixed traffic and every scenario.
 - `docs/decisions.md`: `YYYY-MM-DD: installed the dev-dashboard sample (in-process metrics, traces, SQL, insights, load lab; development only)`; and the crates it added.
 - `.env`: `GITHUB_REPO=owner/name` (and optionally a read-only `GITHUB_TOKEN`) for the GitHub page; `TEST_DATABASE_URL` for Run tests on Postgres.
 - `app test` replaces nothing in CI: CI keeps running `cargo nextest run` on both databases. Run `app test` locally to see the runs on the Tests page.
@@ -110,7 +111,7 @@ Everything is in this process, in one hub (`kernel/dashboard/mod.rs`, `HUB`) of 
 | `collector.rs` | a task `serve` starts | once a second: RSS, virtual memory, CPU (sysinfo), open files, Tokio (workers, alive tasks, global queue, busy time; more with `--cfg tokio_unstable`), the pool (size, idle, max; sqlx doesn't count waiters, so saturation is "no idle connection at max size"), requests and SQL; 15 min at 1 s, 24 h at 1 min |
 | `insights.rs`, `route_explorer.rs`, `schema.rs` | the above, the database catalog, CSP reports | findings, route problems, the schema |
 
-A request's context lives in a Tokio task-local while it runs, so the SQL callback and the tracing layer attach to it without passing anything around. The dashboard's own pages and streams run "quietly" and record nothing. Charts are SVG rendered on the server (one implementation, works without JavaScript, nothing to vendor, the strict CSP untouched); `dashboard.js` swaps in re-rendered fragments from a Server-Sent Events stream (every 5 s with `prefers-reduced-motion`, never while the tab is hidden) and adds the hover readout.
+Annotations (boot, load-lab runs, error bursts over `ERROR_BURST` per second, the demo's deploy and incident) are kept with the series (200 at most) and drawn on every chart. A request's context lives in a Tokio task-local while it runs, so the SQL callback and the tracing layer attach to it without passing anything around. The dashboard's own pages and streams run "quietly" and record nothing. Charts are SVG rendered on the server (one implementation, works without JavaScript, nothing to vendor, the strict CSP untouched; colors are CSS tokens, so the theme switch needs no redraw); `dashboard.js` swaps in re-rendered fragments from a Server-Sent Events stream (every 5 s with `prefers-reduced-motion`, never while the tab is hidden), and adds the synchronized crosshair, the readout, zoom (`?from=&to=`, within the last 24 hours) and the click into `/dev/dashboard/traces?minute=`.
 
 **Overhead**, measured by `the_middleware_overhead_is_small` (a trivial route behind the middleware alone, recording on and off on alternate requests, compared by median over 3,600 requests): **1.2 µs per request in a release build**, about 5 µs in a debug build; the test fails above 10 µs (release) or 50 µs (debug). A whole development request through every layer, with its SQL recorded and its trace and log line written, measured 6.3 µs more (97 → 103 µs for a static page, release). With the dashboard off (production by default, and tests) the middleware checks one atomic flag.
 
@@ -135,7 +136,7 @@ A request's context lives in a Tokio task-local while it runs, so the SQL callba
 | `src/kernel/dashboard/http.rs` | the middleware, route matching, per-route stats, 404s, writes during a GET |
 | `src/kernel/dashboard/sql.rs` | the SQL callback, fingerprints, redaction, N+1, EXPLAIN |
 | `src/kernel/dashboard/trace.rs` | the tracing layer, traces, the log ring, the waterfall, the OTLP hook |
-| `src/kernel/dashboard/collector.rs`, `series.rs`, `hist.rs` | the once-a-second sampler, the rings, the histogram |
+| `src/kernel/dashboard/collector.rs`, `series.rs`, `hist.rs`, `demo.rs` | the once-a-second sampler, the rings and annotations, the histogram, the demo's synthetic hour |
 | `src/kernel/dashboard/charts.rs` | chart geometry (SVG) and text alternatives |
 | `src/kernel/dashboard/insights.rs`, `route_explorer.rs`, `schema.rs`, `panels.rs` | findings, route detectors, the catalog, provider panels |
 | `src/kernel/dashboard/lab.rs`, `cli.rs` | the load lab, `app bench`, `app test`, `app dashboard` |

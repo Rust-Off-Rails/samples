@@ -798,11 +798,9 @@ async fn the_load_lab_runs_traffic_and_scenarios() {
     lab::seed(app.db(), 20).await.unwrap();
     app.post_form(
         "/dev/dashboard/lab/traffic",
-        &[
-            ("paths", "/dev/lab/orders\n/"),
-            ("rps", "50"),
-            ("secs", "1"),
-        ],
+        // WHY: a route without SQL: the test database has one connection, and 32 requests in
+        // flight on it would measure the pool, not the generator.
+        &[("paths", "/robots.txt"), ("rps", "40"), ("secs", "1")],
     )
     .await
     .assert_redirect_to("/dev/dashboard/lab");
@@ -811,18 +809,18 @@ async fn the_load_lab_runs_traffic_and_scenarios() {
     })
     .await;
     let run = HUB.lab.current().unwrap();
-    assert_eq!(run.ok.load(Ordering::Relaxed), 50);
+    assert_eq!(run.ok.load(Ordering::Relaxed), 40);
     let hits: u64 = lock(&HUB.http)
         .rows()
         .iter()
-        .filter(|r| r.route == "/dev/lab/orders")
+        .filter(|r| r.route == "/robots.txt")
         .map(|r| r.count)
         .sum();
-    assert_eq!(hits, 25);
+    assert_eq!(hits, 40);
     app.get("/dev/dashboard/lab")
         .await
         .assert_ok()
-        .assert_text("50 of 50");
+        .assert_text("40 of 40");
     app.post_form("/dev/dashboard/lab/scenario", &[("scenario", "panic")])
         .await
         .assert_redirect_to("/dev/dashboard/logs?level=error");
@@ -860,7 +858,7 @@ async fn bench_drives_a_running_server() {
     let router = offrails_host::routes::router(app.state.clone()).unwrap();
     tokio::spawn(async move { axum::serve(listener, router).await });
     let plan = Plan {
-        paths: vec!["/".into()],
+        paths: vec!["/robots.txt".into()],
         rps: 40,
         secs: 1,
     };
@@ -870,7 +868,7 @@ async fn bench_drives_a_running_server() {
         lock(&HUB.http)
             .rows()
             .iter()
-            .any(|r| r.route == "/" && r.count == 40)
+            .any(|r| r.route == "/robots.txt" && r.count == 40)
     );
 }
 
@@ -1082,7 +1080,7 @@ async fn not_found_paths_keep_the_nearest_route_and_a_safe_referrer() {
     )
     .await
     .assert_status(StatusCode::NOT_FOUND);
-    app.get("/login_links/q8Vw3nRt7yXz2KpL9mBc4HdF6sJa1GeU")
+    app.get("/old-links/q8Vw3nRt7yXz2KpL9mBc4HdF6sJa1GeU")
         .await
         .assert_status(StatusCode::NOT_FOUND);
     app.get_with_headers(
@@ -1099,7 +1097,7 @@ async fn not_found_paths_keep_the_nearest_route_and_a_safe_referrer() {
         .assert_not_contains("token=abc")
         .assert_not_contains("q=1")
         .assert_not_contains("q8Vw3nRt7yXz2KpL9mBc4HdF6sJa1GeU")
-        .assert_text("/login_links/[redacted]");
+        .assert_text("/old-links/[redacted]");
     assert_eq!(http::referrer_of("https://x.example/a/b?c=d"), "x.example");
     assert_eq!(
         http::referrer_of("http://localhost:3000/books/1?s=1"),

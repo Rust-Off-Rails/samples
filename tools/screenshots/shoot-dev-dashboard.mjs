@@ -32,7 +32,11 @@ const ensureTraffic = async () => {
 
 const screens = [
   ["overview", async () => "/dev/dashboard"],
-  ["charts", async () => "/dev/dashboard/charts?range=15m"],
+  ["charts", async () => "/dev/dashboard/charts?range=1h"],
+  ["charts-readout", async () => "/dev/dashboard/charts?range=1h", async (page) => {
+    const box = await page.locator("#chart-latency .plot").boundingBox();
+    if (box) await page.mouse.move(box.x + box.width * 0.78, box.y + box.height * 0.5);
+  }],
   ["insights", async () => "/dev/dashboard/insights"],
   ["requests", async () => "/dev/dashboard/requests?sort=p95"],
   ["routes", async () => "/dev/dashboard/routes?area=dev&q=lab"],
