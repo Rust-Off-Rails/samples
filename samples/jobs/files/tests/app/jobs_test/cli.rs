@@ -102,7 +102,7 @@ async fn stats_list_and_show_print_tables_and_json() {
     );
 }
 
-/// SECURITY: secrets that slipped into args never reach the terminal or JSON output.
+/// Security: secrets that slipped into args never reach the terminal or JSON output.
 #[tokio::test]
 async fn sensitive_args_are_redacted_in_the_cli_and_admin_views() {
     let app = TestApp::new().await;

@@ -135,7 +135,8 @@ async fn run<W: Worker>(state: &AppState, args: Value, job: &JobInfo) -> anyhow:
     match serde_json::from_value::<W>(args) {
         Ok(w) => w.perform(job, state).await,
         // SECURITY: typed decoding only: a row with unexpected args (edited, or from an older
-        // version) is discarded, never run with guessed values.
+        // version) is discarded, never run with guessed values
+        // (test: unknown_workers_and_bad_args_are_discarded).
         Err(e) => Ok(Outcome::Discard(format!("args don't deserialize: {e}"))),
     }
 }

@@ -312,7 +312,7 @@ pub fn valid_queue_name(name: &str) -> bool {
 /// A synthetic node name, `node-<8 hex>`: unique per process start, so a restart never inherits
 /// a stale row.
 /// SECURITY: never the hostname. Node names are shown on the dashboard and in logs, and a
-/// hostname leaks infrastructure details.
+/// hostname leaks infrastructure details (test: node_ids_are_synthetic_and_unique).
 pub fn node_id() -> String {
     let id = uuid::Uuid::new_v4().simple().to_string();
     format!("node-{}", &id[..8])

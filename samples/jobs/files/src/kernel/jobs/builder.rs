@@ -227,6 +227,13 @@ impl JobBuilder {
         self
     }
 
+    /// Drops the worker's default uniqueness for this insert (fan-out with `insert_all`, where
+    /// every row is wanted).
+    pub fn without_unique(mut self) -> Self {
+        self.unique = None;
+        self
+    }
+
     fn into_active_model(
         self,
         now: DateTime<Utc>,

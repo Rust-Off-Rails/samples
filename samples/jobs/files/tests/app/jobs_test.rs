@@ -3,7 +3,11 @@
 //! GUIDE: .offrails/guides/jobs.md#testing-obantesting-equivalents
 //!
 //! These tests use their own dispatcher (workers `ok`, `fail`, `snooze`, …), so they don't
-//! depend on the app's workers; the tests at the end cover those.
+//! depend on the app's workers; the tests at the end cover those. `runtime` covers the
+//! long-running worker, `cli` the `app jobs` commands.
+
+mod cli;
+mod runtime;
 
 use std::{
     collections::HashMap,
@@ -1012,7 +1016,7 @@ async fn bulk_actions_refuse_an_empty_filter() {
     );
 }
 
-/// SECURITY: filters and search are bound parameters; quotes and wildcards are just text.
+/// Security: filters and search are bound parameters; quotes and wildcards are just text.
 #[tokio::test]
 async fn filters_and_search_are_parameterized_against_injection() {
     let app = TestApp::new().await;

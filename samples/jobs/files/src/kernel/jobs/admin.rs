@@ -462,20 +462,32 @@ pub struct ErrorGroup {
     pub search: Option<String>,
 }
 
-/// First line, digit runs → `N`, at most 160 characters: "same error, different ids".
+/// First line, numbers → `N`, at most 160 characters: "same error, different ids".
+/// Digits inside a word (`v2`, `utf8`) and HTTP status codes (`HTTP 503`) are kept, so a 503
+/// and a 429 stay two groups.
 pub fn error_signature(message: &str) -> String {
     let line = message.lines().next().unwrap_or_default();
+    let chars: Vec<char> = line.chars().collect();
     let mut out = String::with_capacity(line.len());
-    let mut in_digits = false;
-    for c in line.chars() {
-        if c.is_ascii_digit() {
-            if !in_digits {
-                out.push('N');
-            }
-            in_digits = true;
-        } else {
-            in_digits = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if !c.is_ascii_digit() {
             out.push(c);
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < chars.len() && chars[i].is_ascii_digit() {
+            i += 1;
+        }
+        let run: String = chars[start..i].iter().collect();
+        let in_word = start > 0 && chars[start - 1].is_ascii_alphabetic();
+        let status = run.len() == 3 && out.ends_with("HTTP ");
+        if in_word || status {
+            out.push_str(&run);
+        } else {
+            out.push('N');
         }
     }
     super::executor::truncate(out.trim(), 160)
@@ -579,7 +591,8 @@ impl JobFilter {
 
 /// `%…%`, lowercased, with `\`, `%` and `_` escaped for `LIKE … ESCAPE '\'`.
 /// SECURITY: the pattern is a bound value, and its wildcards are escaped, so a search for
-/// `%` or `_` matches those characters instead of everything.
+/// `%` or `_` matches those characters instead of everything
+/// (test: filters_and_search_are_parameterized_against_injection).
 pub fn like_pattern(needle: &str) -> String {
     let mut out = String::from("%");
     for c in needle.to_lowercase().chars() {
@@ -1123,7 +1136,11 @@ mod tests {
     fn error_signatures_group_by_shape() {
         assert_eq!(
             error_signature("order 42 failed: HTTP 503\nCaused by: x"),
-            "order N failed: HTTP N"
+            "order N failed: HTTP 503"
+        );
+        assert_eq!(
+            error_signature("GET /v2/items/77 timed out after 30s"),
+            "GET /v2/items/N timed out after Ns"
         );
         assert_eq!(
             error_signature("order 7 failed: HTTP 503"),
