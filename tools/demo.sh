@@ -89,6 +89,9 @@ EOF
 if grep -q "installed sample dev-mailbox " docs/decisions.md; then
   "$demo/app-bin" mailbox seed --app-url "$url" >/dev/null
 fi
+if grep -q "installed sample jobs-dashboard " docs/decisions.md; then
+  "$demo/app-bin" task jobs_demo >/dev/null
+fi
 
 nohup "$demo/app-bin" serve > "$demo/demo.log" 2>&1 &
 echo $! > "$pidfile"

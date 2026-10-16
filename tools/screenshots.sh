@@ -12,3 +12,8 @@ fi
 base=$(cat demo/demo.url)
 (cd tools/screenshots && pnpm install --frozen-lockfile --silent)
 BASE="$base" OUT="$root/docs/screenshots" node tools/screenshots/shoot.mjs "$@"
+if [ $# -eq 0 ] || printf '%s\n' "$@" | grep -qx jobs-dashboard; then
+  if grep -q "installed sample jobs-dashboard " demo/app/docs/decisions.md 2>/dev/null; then
+    BASE="$base" OUT="$root/docs/screenshots/jobs-dashboard" node tools/screenshots/shoot-jobs-dashboard.mjs
+  fi
+fi
