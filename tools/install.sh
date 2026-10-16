@@ -163,6 +163,11 @@ for s in $order; do
     elif ! grep -q "samples: $anchor\$" "$app/$file" && ! grep -q "samples: $anchor " "$app/$file"; then
       echo "refuse $s: $file has no 'samples: $anchor' anchor; apply this wiring by hand (README.md, Wiring)" >&2
       problems=$((problems + 1))
+    elif ! grep -E "samples: $anchor( |\$)" "$app/$file" | grep -qE '^[[:space:]]*(//|\{#|#|/\*)'; then
+      # WHY: an anchor trailing code (`} // samples: x`, as rustfmt may leave it) would put the
+      # insertion inside that code.
+      echo "refuse $s: the 'samples: $anchor' anchor in $file shares its line with code; move it onto its own line" >&2
+      problems=$((problems + 1))
     fi
   done < "$work/$s/wires"
 done

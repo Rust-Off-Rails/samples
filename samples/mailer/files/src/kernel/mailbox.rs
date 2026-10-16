@@ -110,6 +110,46 @@ fn escape_like(s: &str) -> String {
         .replace('_', "\\_")
 }
 
+/// What `/dev/mailbox.json` and tests narrow by. Every field is optional.
+#[derive(Debug, Clone, Default)]
+pub struct Filter {
+    /// Exact recipient (compared lowercased).
+    pub to: Option<String>,
+    /// Subject contains (case-insensitive; `%` and `_` are literal).
+    pub subject: Option<String>,
+    /// Only ids above this cursor.
+    pub since: Option<i64>,
+}
+
+/// The newest `limit` messages matching `f`.
+pub async fn filter(
+    db: &impl ConnectionTrait,
+    f: &Filter,
+    limit: u64,
+) -> Result<Vec<Model>, DbErr> {
+    use sea_orm::sea_query::{Expr, ExprTrait, Func, LikeExpr};
+    let mut query = Entity::find().order_by_desc(Column::Id).limit(limit);
+    if let Some(to) = f.to.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        query = query.filter(Column::ToAddr.eq(to.to_lowercase()));
+    }
+    if let Some(subject) = f
+        .subject
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let pattern = format!("%{}%", escape_like(&subject.to_lowercase()));
+        query = query.filter(
+            Expr::expr(Func::lower(Expr::col(Column::Subject)))
+                .like(LikeExpr::new(pattern).escape('\\')),
+        );
+    }
+    if let Some(since) = f.since {
+        query = query.filter(Column::Id.gt(since));
+    }
+    query.all(db).await
+}
+
 pub async fn find(db: &impl ConnectionTrait, id: i64) -> Result<Option<Model>, DbErr> {
     Entity::find_by_id(id).one(db).await
 }

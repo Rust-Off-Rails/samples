@@ -87,7 +87,7 @@ The anchors `host/` provides (each file says what goes there):
 | `src/routes.rs` | `routes` (`app = app.route(…)`), `dev routers` (merged in development only), `paths`, `routes table` (`ROUTES` rows) |
 | `src/controllers/mod.rs` | `controller mods` |
 | `src/controllers/application.rs` | `ctx init`, `extractors` |
-| `src/controllers/dev.rs` | `dev routes`, `dev tiles`, `dev try-it`, `system facts` |
+| `src/controllers/dev.rs` | `dev routes`, `dev tiles` (a `Tile { … },`), `dev try-it` (a `TryIt { … },`), `system facts` (`facts.push(…);`) |
 | `src/controllers/meta.rs` | `sitemap paths` |
 | `src/views/mod.rs` | `view mods`, `ctx fields` |
 | `src/models/mod.rs` | `model mods`, `model aliases` |
