@@ -79,6 +79,7 @@
   </div>
 
   {% if m.tab == "html" %}
+  {# SECURITY: no allow-scripts, no allow-same-origin: mail can't run code or read this page (test: the_html_body_is_served_alone_in_a_sandbox) #}
   <div class="mbx-stage mbx-stage-{{ m.view }}">
     <iframe class="mbx-frame" src="{{ m.html_src }}" title="Email body: {{ m.subject }}" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" loading="lazy"></iframe>
   </div>

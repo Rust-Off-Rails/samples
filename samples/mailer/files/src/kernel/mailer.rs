@@ -3,6 +3,7 @@
 //! at `/dev/mailbox` with the dev-mailbox sample), memory in tests. Spec: .offrails/guides/mailers.md
 //!
 //! The kernel only offers constructors; which one an environment uses is `state::select_mailer`.
+//! GUIDE: .offrails/guides/mailers.md#kernel-spec-srckernelmailerrs
 
 use std::sync::{Arc, Mutex};
 
@@ -108,8 +109,8 @@ pub enum Mailer {
         db: DatabaseConnection,
         from: Mailbox,
     },
-    /// Production fallback when no SMTP is configured: a log line with recipient and subject only
-    /// (never the body, which may carry a link that signs someone in).
+    /// Production fallback when no SMTP is configured: a log line with recipient and subject only.
+    // WHY: never the body: it may carry a link that signs someone in, and logs are widely readable.
     Log,
     /// Tests: `app.sent_emails()`.
     Memory(Arc<Mutex<Vec<Email>>>),
@@ -190,6 +191,8 @@ impl Mailer {
 /// Refuses what would let input rewrite the message's headers: a line break (or any other
 /// control character) in the subject, a filename or a content type, and recipients that aren't
 /// one valid address each. Addresses are parsed by lettre; this covers the free-text headers.
+// SECURITY: header injection. A CR/LF in a header value would let input add headers (Bcc: …) or
+// a body; every adapter calls this before anything is sent or stored (test: header_injection_is_refused_before_anything_is_sent).
 pub fn validate(email: &Email) -> anyhow::Result<()> {
     let unsafe_text = |s: &str| s.chars().any(char::is_control);
     if unsafe_text(&email.subject) {
@@ -243,7 +246,7 @@ pub fn build(from: &Mailbox, email: &Email) -> anyhow::Result<Message> {
         mixed
     };
 
-    // Message-ID from the sender's domain, never this machine's hostname.
+    // WHY: Message-ID from the sender's domain: lettre's default uses this machine's hostname.
     let message_id = format!(
         "<{}@{}>",
         uuid::Uuid::new_v4().simple(),
@@ -273,7 +276,8 @@ pub type PreviewFuture<'a> =
 /// A mailer preview (`/rails/mailers`): `src/mailers/previews.rs` lists them, and the dev
 /// mailbox renders them in the same viewer as real mail.
 pub struct Preview {
-    /// `<mailer>/<action>`, e.g. `test_mailer/test_email`.
+    /// `<mailer>/<action>`, e.g. `test_mailer/test_email` (two segments: the dev mailbox routes
+    /// them as `/dev/mailbox/previews/{mailer}/{action}`).
     pub name: &'static str,
     pub build: for<'a> fn(&'a AppState) -> PreviewFuture<'a>,
 }

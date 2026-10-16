@@ -222,7 +222,7 @@ async fn the_html_body_is_served_alone_in_a_sandbox() {
         "{iframe}"
     );
     assert!(!iframe.contains("allow-scripts") && !iframe.contains("allow-same-origin"));
-    assert!(iframe.contains(&format!(r#"src="/dev/mailbox/{id}/html""#)));
+    assert!(iframe.contains(&format!(r#"src="/dev/mailbox/{id}/html?scheme=light""#)));
 }
 
 #[tokio::test]

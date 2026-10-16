@@ -2,6 +2,8 @@
 //! development, rendered, live. Mounted only when `APP_ENV=development`; in production the routes
 //! don't exist. Every response is `no-store`. Spec: .offrails/guides/mailers.md#the-dev-mailbox
 //!
+//! GUIDE: .offrails/guides/mailers.md#the-dev-mailbox-kernelmailboxrs-swooshs-local-mailbox
+//!
 //! It styles itself: `static/kernel/mailbox.css` and `static/kernel/mailbox.js` ship with it and
 //! every mailbox page declares them on its `Chrome`. Nothing here depends on `assets/app.css`.
 //!
@@ -32,18 +34,23 @@ use crate::kernel::ui::{self, Chrome};
 use crate::state::AppState;
 
 /// The inbox list shows at most this many (newest first).
-const LIST_LIMIT: u64 = 200;
+const LIST_LIMIT: u64 = 200; // APP: more rows, longer pages
 /// `/dev/mailbox.json` returns this many.
 const JSON_LIMIT: u64 = 50;
 /// How often a live inbox checks for new mail.
+// WHY: a poll of the table, not an in-process channel: mail from a worker or a task (another
+// process) must show too. One cheap query per open tab per second, in development only.
 const POLL: Duration = Duration::from_secs(1);
 
+// SECURITY: mail can't run script or reach this page: `sandbox` without allow-scripts and without
+// allow-same-origin gives the body an opaque origin, also when opened outside the frame (test: the_html_body_is_served_alone_in_a_sandbox).
 /// The iframe body's own policy: no script anywhere (`sandbox` without `allow-scripts`), an opaque
 /// origin, only this page may frame it. Images, styles and fonts may load, as in a mail client.
 pub const BODY_CSP: &str = "sandbox allow-popups allow-popups-to-escape-sandbox; default-src 'none'; \
      img-src * data: cid:; style-src 'unsafe-inline' *; font-src * data:; form-action 'none'; \
      frame-ancestors 'self'";
 
+// SECURITY: an HTML or SVG attachment opened from here would run on this origin; always a download, sandboxed (test: attachments_are_downloads_never_documents_on_this_origin).
 /// Attachments are downloads, never documents on this origin.
 const ATTACHMENT_CSP: &str = "sandbox; default-src 'none'";
 
@@ -69,6 +76,7 @@ pub fn router(previews: &'static [Preview]) -> axum::Router<AppState> {
         .route("/dev/mailbox/{id}/delete", post(delete))
         .route("/dev/mailers", get(mailers_redirect))
         .layer(Extension(Previews(previews)))
+        // SECURITY: mail content never lands in a shared or back/forward cache (test: every_mailbox_response_is_no_store).
         .layer(ui::no_store())
 }
 
@@ -110,6 +118,7 @@ pub struct AttachmentView {
     pub image: bool,
 }
 
+// SECURITY: raster types only; SVG can carry script (test: attachments_are_downloads_never_documents_on_this_origin).
 fn is_previewable_image(content_type: &str) -> bool {
     matches!(
         content_type.to_ascii_lowercase().as_str(),
@@ -246,6 +255,7 @@ struct IndexPage {
     pane: &'static str,
     rows: Vec<Row>,
     previews: Vec<PreviewRow>,
+    preview_count: usize,
     message: Option<MessageView>,
     q: String,
     total: u64,
@@ -405,7 +415,7 @@ fn message_view(m: &Model, q: &ViewQuery) -> MessageView {
         reply_to: m.reply_to.clone(),
         date,
         headers,
-        html_src: format!("{path}/html"),
+        html_src: format!("{path}/html?scheme={}", scheme_of(view)),
         text: m.text.clone(),
         raw: m.eml.clone(),
         links: mailbox::links_in(&m.text, &m.html),
@@ -460,7 +470,7 @@ fn preview_view(name: &str, email: &Email, from: &str, q: &ViewQuery) -> Message
         reply_to: email.reply_to.clone(),
         date: "rendered now, not sent".to_owned(),
         headers,
-        html_src: format!("{path}/html"),
+        html_src: format!("{path}/html?scheme={}", scheme_of(view)),
         text: email.text.clone(),
         raw,
         links: mailbox::links_in(&email.text, &email.html),
@@ -512,6 +522,7 @@ fn list_src(q: &str, selected: i64) -> String {
 
 async fn inbox_page(
     state: &AppState,
+    previews: &'static [Preview],
     q: &ViewQuery,
     selected: Option<Model>,
     flash: Option<FlashMessage>,
@@ -524,6 +535,7 @@ async fn inbox_page(
         pane: "inbox",
         rows: rows(&messages, selected_id, &q.q),
         previews: Vec::new(),
+        preview_count: previews.len(),
         message: selected.as_ref().map(|m| message_view(m, q)),
         q: q.q.clone(),
         total,
@@ -537,6 +549,7 @@ async fn inbox_page(
 /// `GET /dev/mailbox`: the inbox, with the newest matching message open.
 async fn index(
     State(state): State<AppState>,
+    Extension(Previews(previews)): Extension<Previews>,
     Query(q): Query<ViewQuery>,
     flash: Option<Extension<RequestFlash>>,
 ) -> Result<Response, AppError> {
@@ -547,13 +560,14 @@ async fn index(
     if let Some(m) = &newest {
         mailbox::mark_read(&state.db, m.id).await?;
     }
-    inbox_page(&state, &q, newest, flash.and_then(|f| f.0.0)).await
+    inbox_page(&state, previews, &q, newest, flash.and_then(|f| f.0.0)).await
 }
 
 /// `GET /dev/mailbox/{id}`: the inbox with message `id` open; opening marks it read. A message
 /// that's gone redirects to the inbox with a flash, never a bare 404.
 async fn show(
     State(state): State<AppState>,
+    Extension(Previews(previews)): Extension<Previews>,
     Path(id): Path<i64>,
     Query(q): Query<ViewQuery>,
     flash: Option<Extension<RequestFlash>>,
@@ -565,7 +579,7 @@ async fn show(
         mailbox::mark_read(&state.db, id).await?;
         m.read_at = Some(Utc::now());
     }
-    inbox_page(&state, &q, Some(m), flash.and_then(|f| f.0.0)).await
+    inbox_page(&state, previews, &q, Some(m), flash.and_then(|f| f.0.0)).await
 }
 
 fn gone(q: &str) -> Response {
@@ -675,14 +689,60 @@ async fn events(
 }
 
 /// `GET /dev/mailbox/{id}/html`: the HTML body alone, for the sandboxed iframe.
+#[derive(Debug, Default, Deserialize)]
+struct SchemeQuery {
+    scheme: Option<String>,
+}
+
+fn scheme_of(view: &str) -> &'static str {
+    if view == "dark" { "dark" } else { "light" }
+}
+
 async fn html_body(
     State(state): State<AppState>,
     Path(id): Path<i64>,
+    Query(q): Query<SchemeQuery>,
 ) -> Result<Response, AppError> {
     let m = mailbox::find(&state.db, id)
         .await?
         .ok_or(AppError::NotFound)?;
-    Ok(sandboxed_html(&m.html))
+    Ok(sandboxed_html(&in_scheme(&m.html, q.scheme.as_deref())))
+}
+
+/// The body as a mail client in that color scheme shows it.
+///
+/// WHY: the frame is cross-origin (sandboxed), so the browser gives it this machine's theme, not
+/// the frame element's `color-scheme`. Rewriting the media queries makes the preview independent
+/// of the developer's OS: `light` drops the mail's dark-mode rules; `dark` applies them, and mail
+/// without any gets the full-color inversion many mail apps apply.
+pub fn in_scheme(html: &str, scheme: Option<&str>) -> String {
+    let dark_rules = ["prefers-color-scheme: dark", "prefers-color-scheme:dark"];
+    let light_rules = ["prefers-color-scheme: light", "prefers-color-scheme:light"];
+    let mut out = html.to_owned();
+    match scheme {
+        Some("dark") => {
+            let has_dark = dark_rules.iter().any(|r| out.contains(r));
+            for r in dark_rules {
+                out = out.replace(r, "min-width: 0");
+            }
+            for r in light_rules {
+                out = out.replace(r, "max-width: 0");
+            }
+            if !has_dark {
+                out = inject_head(
+                    &out,
+                    "<style>html{filter:invert(1) hue-rotate(180deg);background:#fff}img,picture,video{filter:invert(1) hue-rotate(180deg)}</style>",
+                );
+            }
+            out
+        }
+        _ => {
+            for r in dark_rules {
+                out = out.replace(r, "max-width: 0");
+            }
+            out
+        }
+    }
 }
 
 /// The iframe body with its own headers (the global header matrix only fills headers a response
@@ -708,7 +768,13 @@ pub fn sandboxed_html(html: &str) -> Response {
 /// Links in an HTML body open in a new tab: `<base target="_blank">` right after `<head …>`, or
 /// after `<html …>`/the doctype when there is no head, never before the doctype (quirks mode).
 pub fn with_blank_base(html: &str) -> String {
-    const BASE: &str = r#"<base target="_blank">"#;
+    inject_head(html, r#"<base target="_blank">"#)
+}
+
+/// `snippet` right after `<head …>`, or after `<html …>`/the doctype when there is no head, never
+/// before the doctype (that would switch the document to quirks mode).
+fn inject_head(html: &str, snippet: &str) -> String {
+    let base = snippet;
     let lower = html.to_ascii_lowercase();
     let after_tag = |tag: &str| {
         let mut from = 0;
@@ -726,8 +792,8 @@ pub fn with_blank_base(html: &str) -> String {
         .or_else(|| after_tag("<html"))
         .or_else(|| after_tag("<!doctype"))
     {
-        Some(at) => format!("{}{BASE}{}", &html[..at], &html[at..]),
-        None => format!("{BASE}{html}"),
+        Some(at) => format!("{}{base}{}", &html[..at], &html[at..]),
+        None => format!("{base}{html}"),
     }
 }
 
@@ -790,6 +856,7 @@ async fn attachment(
     Ok(res)
 }
 
+// SECURITY: a quote or line break in a filename would break out of the header (test: filenames_are_safe_in_a_quoted_header).
 /// A filename that is safe inside a quoted `Content-Disposition` value.
 pub fn safe_filename(name: &str) -> String {
     let cleaned: String = name
@@ -854,6 +921,7 @@ async fn send_test(State(state): State<AppState>) -> Result<Response, AppError> 
         &state.config.app_url,
         &format!("{:06}", rand::random_range(0..1_000_000)),
     );
+    // INVARIANT: the test button stores locally, never over SMTP, whatever MAILER says (test: the_test_email_button_never_sends_over_smtp).
     Mailer::local(state.db.clone(), from).deliver(email).await?;
     let id = mailbox::newest_id(&state.db).await?;
     Ok((
@@ -984,6 +1052,7 @@ async fn previews_page(
         pane: "previews",
         rows: Vec::new(),
         previews: preview_rows(previews, selected.map(|p| p.name)),
+        preview_count: previews.len(),
         message,
         q: String::new(),
         total,
@@ -1040,9 +1109,11 @@ async fn preview_html(
     State(state): State<AppState>,
     Extension(Previews(previews)): Extension<Previews>,
     Path((mailer, action)): Path<(String, String)>,
+    Query(q): Query<SchemeQuery>,
 ) -> Result<Response, AppError> {
     let p = find_preview(previews, &mailer, &action).ok_or(AppError::NotFound)?;
-    Ok(sandboxed_html(&(p.build)(&state).await?.html))
+    let html = (p.build)(&state).await?.html;
+    Ok(sandboxed_html(&in_scheme(&html, q.scheme.as_deref())))
 }
 
 /// Older apps linked previews at `/dev/mailers`. 301, not axum's 308 `Redirect::permanent`.
@@ -1082,6 +1153,16 @@ mod tests {
             with_blank_base("<html><header>x</header>"),
             "<html><base target=\"_blank\"><header>x</header>"
         );
+    }
+
+    #[test]
+    fn previews_render_in_the_chosen_scheme_whatever_the_os_says() {
+        let mail = "<html><head><style>@media (prefers-color-scheme: dark){body{background:#000}}</style></head></html>";
+        assert!(in_scheme(mail, Some("light")).contains("@media (max-width: 0)"));
+        assert!(in_scheme(mail, Some("dark")).contains("@media (min-width: 0)"));
+        let plain = "<html><head></head><body>hi</body></html>";
+        assert!(in_scheme(plain, Some("dark")).contains("invert(1)"));
+        assert_eq!(in_scheme(plain, None), plain);
     }
 
     #[test]

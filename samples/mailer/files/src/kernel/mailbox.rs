@@ -5,6 +5,7 @@
 //!
 //! The table exists in every environment (one schema everywhere) and is written only by
 //! `Mailer::Local`, which production never selects unless `MAILER=local` says so.
+//! GUIDE: .offrails/guides/mailers.md#the-dev-mailbox-kernelmailboxrs-swooshs-local-mailbox
 
 use chrono::Utc;
 use lettre::message::Mailbox;
@@ -52,7 +53,7 @@ pub mod message {
 }
 
 /// How many messages development keeps (`trim`, run by the jobs sample's cleanup job).
-pub const KEEP: u64 = 500;
+pub const KEEP: u64 = 500; // APP: how many messages development keeps
 
 /// Stores what `Mailer::Local` just built: the decoded parts for the viewer, the exact RFC 822
 /// message for Raw and `.eml`. Bcc is kept separately (it never appears in the sent headers).
@@ -304,6 +305,7 @@ pub fn links_in(text: &str, html: &str) -> Vec<String> {
 /// with at least one of each, on a line that talks about a code. A digit-only token alone on its
 /// line counts too. Years and prices don't: they're not on such a line.
 pub fn codes_in(text: &str) -> Vec<String> {
+    // APP: words that mark a line as talking about a code (add your product's own, e.g. "PIN").
     const WORDS: &[&str] = &[
         "code",
         "otp",

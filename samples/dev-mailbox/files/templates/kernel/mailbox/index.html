@@ -12,7 +12,7 @@
     </header>
     <nav class="mbx-tabs" aria-label="Mailbox views">
       <a href="/dev/mailbox"{% if pane == "inbox" %} aria-current="page"{% endif %}>Inbox<span class="mbx-count" data-unread-count>{% if unread > 0 %}{{ unread }}{% endif %}</span><span class="visually-hidden"> unread</span></a>
-      <a href="/dev/mailbox/previews"{% if pane == "previews" %} aria-current="page"{% endif %}>Previews<span class="mbx-count mbx-count-quiet">{{ previews.len() }}</span></a>
+      <a href="/dev/mailbox/previews"{% if pane == "previews" %} aria-current="page"{% endif %}>Previews<span class="mbx-count mbx-count-quiet">{{ preview_count }}</span></a>
     </nav>
     {% if pane == "inbox" %}
     <form class="mbx-search" role="search" method="get" action="/dev/mailbox">

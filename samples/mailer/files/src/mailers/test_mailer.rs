@@ -26,7 +26,10 @@ struct TestEmailText<'a> {
 }
 
 /// "Test email from <app>": who it's from, when it was rendered, and a link back to the app.
+/// APP: the pattern for every mailer: two templates (HTML + text) sharing field names, absolute
+/// URLs from `config.app_url` + a `paths::` helper, one preview in `previews.rs`.
 pub fn test_email(config: &Config, to: &str) -> Result<Email, AppError> {
+    // INVARIANT: links are absolute and follow the address being served in development (test: development_links_follow_the_port_being_served).
     let app_url = format!("{}{}", config.app_url, paths::root());
     let sent_at = chrono::Utc::now()
         .format("%Y-%m-%d %H:%M:%S UTC")

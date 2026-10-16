@@ -98,14 +98,15 @@ run_one() {
   step "css" sh -c 'bin/setup-tailwind && bin/tailwindcss -i assets/app.css -o static/app.css --minify 2>&1 | tail -1' || return 1
   step "routes" sh -c 'cargo run -q -- routes > /dev/null' || return 1
   step "clippy" cargo clippy -q --all-targets -- -D warnings || return 1
+  # The framework's lint set for shipped code: no unwrap/expect outside tests (workflow.md DoD).
+  step "clippy (no unwrap/expect)" cargo clippy -q --lib --bins -- -D warnings -D clippy::unwrap_used -D clippy::expect_used || return 1
   step "tests (SQLite)" cargo nextest run --no-fail-fast --status-level fail --final-status-level fail || return 1
   if [ "$postgres" = 1 ]; then
     step "tests (Postgres)" env TEST_DATABASE_URL="$pg_url" cargo nextest run --no-fail-fast --status-level fail --final-status-level fail || return 1
   fi
   step "offrails-check" sh .offrails/tools/offrails-check || return 1
-  if command -v cargo-deny >/dev/null 2>&1; then
-    step "cargo deny" sh -c 'cargo deny check 2>&1 | tail -1' || return 1
-  fi
+  step "cargo deny" cargo deny --log-level error check || return 1
+  step "cargo audit" cargo audit -q --deny warnings || return 1
   step "fmt --check" cargo fmt --all --check || return 1
 }
 

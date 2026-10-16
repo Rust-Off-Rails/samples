@@ -1,0 +1,4 @@
+10110	IGNORE	(Dangerous JS Functions) htmx ships a documented eval path that is disabled by allowEval:false and blocked by the CSP (no unsafe-eval)
+10202	IGNORE	(Absence of Anti-CSRF Tokens) by design: Fetch Metadata + Origin checks (tower-http CsrfLayer) and SameSite=Lax cookies; tested by cross_site_posts_to_every_unsafe_route_are_403
+90004	IGNORE	(Insufficient Site Isolation Against Spectre) COEP is deliberately unset: require-corp breaks third-party embeds; COOP and CORP are set
+10049	INFO	(Storable and Cacheable / Non-Storable Content) informational: public pages and /static are meant to be cacheable; kernel pages are no-store

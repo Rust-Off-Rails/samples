@@ -104,6 +104,7 @@ impl MailConfig {
     }
 }
 
+// SECURITY: SMTP_URL carries credentials; /dev/introspect.json and logs print Config's Debug (test: the_smtp_url_never_shows_in_config_debug).
 impl std::fmt::Debug for MailConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MailConfig")
@@ -141,9 +142,9 @@ mailer,
 file = "src/state.rs"
 anchor = "state fns"
 text = '''
-/// Which mailer this environment uses (.offrails/guides/mailers.md#kernel-spec-srckernelmailerrs).
-/// Development is always the dev mailbox (`Local`) unless `MAILER` says otherwise, even with
-/// `SMTP_URL` set; production sends through `SMTP_URL`, or logs when there is none.
+/// Which mailer this environment uses.
+/// GUIDE: .offrails/guides/mailers.md#kernel-spec-srckernelmailerrs
+/// INVARIANT: development is always the dev mailbox unless MAILER says otherwise, even with SMTP_URL set (test: development_always_uses_the_dev_mailbox_even_with_smtp_url_set).
 pub fn select_mailer(
     c: &Config,
     db: &DatabaseConnection,

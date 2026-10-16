@@ -1,0 +1,9 @@
+{
+  "name": "samples-screenshots",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.11.2",
+  "devDependencies": {
+    "playwright-core": "^1.64.1"
+  }
+}

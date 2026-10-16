@@ -31,6 +31,7 @@ Tab {
 file = "src/routes.rs"
 anchor = "dev routers"
 text = '''
+// SECURITY: development only; in production these routes don't exist (test: mailbox_routes_do_not_exist_in_production_or_test).
 app = app.merge(crate::kernel::mailbox_web::router(
     crate::mailers::previews::PREVIEWS,
 ));

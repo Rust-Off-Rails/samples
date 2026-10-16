@@ -133,11 +133,12 @@ kbd { display: inline-block; min-width: 1.3em; padding: 0 .3em; border: 1px soli
 
 /* The HTML body: a stage that shows the chosen width, the frame inside it. */
 .mbx-stage { padding: 1.25rem; border-radius: var(--mbx-radius); background: var(--mbx-stage); }
-.mbx-frame { display: block; width: 100%; height: 70vh; min-height: 420px; margin: 0 auto; border: 0; border-radius: 8px; background: #fff; box-shadow: var(--mbx-shadow); resize: vertical; }
+/* The light/dark rendering of the mail itself is done by the server (mailbox_web::in_scheme): a
+   sandboxed frame is cross-origin and follows the OS theme, whatever its color-scheme says. */
+.mbx-frame { display: block; width: 100%; height: 70vh; min-height: 420px; margin: 0 auto; border: 0; border-radius: 8px; background: #fff; box-shadow: var(--mbx-shadow); color-scheme: light; }
 .mbx-stage-600 .mbx-frame { width: 600px; max-width: 100%; }
 .mbx-stage-320 .mbx-frame { width: 320px; max-width: 100%; border: 8px solid #1c1917; border-radius: 28px; }
-/* WHY: the frame's color-scheme sets prefers-color-scheme inside it, so mail with dark-mode CSS
-   renders its dark variant here, as Apple Mail and Gmail apps would. */
+/* Dark view: the mail's own dark-mode CSS, or the full inversion many mail apps apply. */
 .mbx-stage-dark { background: #0c0a09; }
 .mbx-stage-dark .mbx-frame { color-scheme: dark; background: #111; }
 

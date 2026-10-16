@@ -25,7 +25,7 @@ A strict subset of TOML so a POSIX shell can read it: top-level `key = "value"` 
 
 ```toml
 name = "dev-mailbox"
-version = "0.7.0"                 # the framework release it was verified with
+version = "0.7.0"                 # the samples release it belongs to
 summary = "One line: what it adds."
 depends_on = ["mailer"]           # other samples, installed first (recursively)
 extracted_from = "Rust off Rails apps"
@@ -46,7 +46,7 @@ pub mod mailbox_web;
 | Key | Required | Meaning |
 |-----|----------|---------|
 | `name` | yes | The folder name |
-| `version` | yes | The framework release the sample is verified with |
+| `version` | yes | The samples release it belongs to (proven against the framework in `FRAMEWORK_VERSION`) |
 | `summary` | yes | One line, shown in listings and the MCP `list_samples` |
 | `depends_on` | yes (may be `[]`) | Samples this one needs, installed first |
 | `extracted_from` | yes | Where the code came from, in public words ("Rust off Rails apps") |
@@ -115,12 +115,12 @@ Samples are read and adapted by models of every size. These markers tell a model
 | `// APP: …` | This line or block is meant to be customized, and how (names, copy, limits, routes) | `const KEEP: u64 = 500; // APP: how many messages development keeps` |
 | `// WHY: …` | A non-obvious choice, in one line, so nobody "simplifies" it away | `// WHY: BEGIN IMMEDIATE, or a read-then-write transaction fails with "database is locked"` |
 | `// INVARIANT: … (test: <test_name>)` | Must stay true; the named test guards it | `// INVARIANT: development always delivers to the mailbox (test: development_always_uses_the_dev_mailbox)` |
-| `// SECURITY: …` | A security-relevant line: the attack it prevents and what breaks if it goes | `// SECURITY: no allow-scripts and no allow-same-origin: mail can't run code or read this page` |
+| `// SECURITY: … (test: <test_name>)` | A security-relevant line: the attack it prevents, what breaks if it goes, and the test that proves it (may continue on the next comment lines) | `// SECURITY: no allow-scripts, no allow-same-origin: mail can't run code or read this page (test: the_html_body_is_served_alone_in_a_sandbox)` |
 | `// GUIDE: .offrails/guides/<guide>.md#<anchor>` | The framework section this code implements (the app's vendored copy) | `// GUIDE: .offrails/guides/mailers.md#the-dev-mailbox` |
 
 - In templates use `{# APP: … #}` (Askama), in CSS `/* APP: … */`, in shell and TOML `# APP: …`.
 - Dense where it matters, absent where the code is obvious. Never narrate what the next line does.
-- Every `// SECURITY:` marker names behavior a test proves; every `(test: name)` names a test that exists. `tools/security-check.sh` fails on a dangling one.
+- Every `// SECURITY:` marker ends with `(test: <name>)`, and every `(test: <name>)` (in SECURITY and INVARIANT markers, and every test named in a CHECKS.md table) names a test that exists. `tools/security-check.sh` fails otherwise.
 - READMEs link guides by their public URL too: `https://rustoffrails.org/docs/<guide>` (e.g. `https://rustoffrails.org/docs/mailers`).
 
 ## README.md
