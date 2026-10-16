@@ -33,26 +33,6 @@ services:
       retries: 20
       start_period: 10s
 
-  db:
-      condition: service_healthy
-  environment: &app-env
-    APP_ENV: production
-    DATABASE_URL: postgres://postgres:postgres@db:5432/offrails_host
-    APP_URL: http://localhost:${APP_PORT:-3000}
-    RUST_LOG: ${RUST_LOG:-info}
-    # samples: compose env
-
-services:
-  app:
-    <<: *app
-    ports: ["${APP_PORT:-3000}:3000"]
-    healthcheck:
-      test: ["CMD", "app", "health"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-      start_period: 10s
-
   worker:
     <<: *app
     profiles: [worker]
