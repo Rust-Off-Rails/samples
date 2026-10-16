@@ -15,7 +15,7 @@ What you get (the Rails 8 generator, `phx.gen.auth` and Devise each cover part o
 
 Extracted from Rust off Rails apps and improved: the originals had sessions and return-to, but no rotation on re-auth, no absolute expiry, no device list, no audit trail, no security emails and no shared throttle.
 
-Guides: [`.offrails/guides/auth.md`](https://rustoffrails.org/docs/auth), [`.offrails/guides/security.md`](https://rustoffrails.org/docs/security). Depends on: [dev-mailbox](../dev-mailbox/) (and so [mailer](../mailer/)).
+Guides: [`.offrails/guides/auth.md`](https://rustoffrails.org/docs/auth), [`.offrails/guides/security.md`](https://rustoffrails.org/docs/security). Depends on: [mailer](../mailer/) (the security emails) and [dev-mailbox](../dev-mailbox/) (the "check your mailbox" hint in development).
 
 ## Screenshots
 

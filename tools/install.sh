@@ -110,13 +110,17 @@ meta() { awk -F '\t' -v k="$2" '$1 == k { print $2 }' "$work/$1/meta"; }
 installed() { [ -f "$app/docs/decisions.md" ] && grep -q "installed sample $1 " "$app/docs/decisions.md"; }
 
 # Resolve the install order: dependencies first, each once, already-installed ones skipped.
+# `resolved` holds every finished node (installed or ordered), `visiting` only the current path, so
+# a diamond (auth-core -> mailer and auth-core -> dev-mailbox -> mailer) is not a cycle
+# (test: tools/install-test.sh).
 order=""
+resolved=""
 visiting=""
 resolve() {
-  case " $order " in *" $1 "*) return ;; esac
+  case " $resolved " in *" $1 "*) return ;; esac
   case " $visiting " in *" $1 "*) echo "install: dependency cycle at $1" >&2; exit 1 ;; esac
   [ -f "$samples/$1/sample.toml" ] || { echo "install: depends on unknown sample '$1'" >&2; exit 1; }
-  visiting="$visiting $1"
+  visiting="$visiting $1 "
   parse "$1"
   while IFS= read -r dep; do
     [ -n "$dep" ] && resolve "$dep"
@@ -126,6 +130,8 @@ resolve() {
   else
     order="$order $1"
   fi
+  resolved="$resolved $1"
+  visiting=$(printf '%s' "$visiting" | sed "s/ $1 //")
 }
 resolve "$target"
 

@@ -2,8 +2,8 @@
 name = "auth-core"
 version = "0.7.0"
 summary = "Accounts and sessions every auth sample shares: users, database sessions with rotation and revocation, an account security page (devices, activity), re-auth for sensitive actions, email change, security emails with a 'this wasn't me' link, an audit trail and progressive throttling"
-# dev-mailbox brings mailer (listing both trips install.sh's cycle check on the shared dependency)
-depends_on = ["dev-mailbox"]
+# mailer: the security emails (src/mailers/auth_mailer.rs); dev-mailbox: the "check your mailbox" hint.
+depends_on = ["mailer", "dev-mailbox"]
 extracted_from = "Rust off Rails apps"
 
 # Run in the app root, one per line, never with a version (cargo add picks it; read Cargo.lock).

@@ -38,6 +38,8 @@ pg_url="${TEST_DATABASE_URL:-}"
 unset TEST_DATABASE_URL
 
 [ -f "$root/host/.offrails/VERSION" ] || "$root/tools/vendor-framework.sh" "$root/host"
+# install.sh's dependency resolution, on fixtures (seconds; no cargo).
+sh "$root/tools/install-test.sh" || exit 1
 
 export CARGO_TARGET_DIR="$root/.cache/target"
 export CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-never}"
