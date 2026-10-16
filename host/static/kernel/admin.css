@@ -7,7 +7,7 @@
 :root {
   --bg: #fafaf9; --panel: #ffffff; --fg: #1c1917; --muted: #57534e; --border: #d6d3d1;
   --hover: #f5f5f4; --accent: #4338ca; --accent-bg: #eef2ff; --on-accent: #ffffff;
-  --ok: #15803d; --warn: #a16207; --err: #b91c1c; --info: #0369a1;
+  --ok: #166534; --warn: #854d0e; --err: #b91c1c; --info: #075985;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
