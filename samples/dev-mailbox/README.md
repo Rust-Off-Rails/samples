@@ -12,7 +12,7 @@ Every email your app sends in development, in a real inbox at **`/dev/mailbox`**
 - **Mailer previews**: every mailer rendered from sample data in the same viewer, never sent.
 - **Keyboard**: `j`/`k` next and previous, `/` search, `c` copy the code, `o` open the first link, `e` download, `d` delete, `1`–`4` tabs, `?` the list.
 - **For agents and tests**: `/dev/mailbox/latest.json?to=…` and `/dev/mailbox.json?to=&subject=&since=` with links and codes; `app mailbox tail|list|show|clear|seed` in a terminal.
-- **It styles itself**: `static/kernel/mailbox.css` and `mailbox.js` ship with it and every mailbox page links them. Light and dark, WCAG 2.2 AA (axe-clean in both), usable at 320 px.
+- **It styles itself**: `static/kernel/mailbox.css` and `mailbox.js` ship with it and every mailbox page links them. Light and dark, following the kernel header's System / Light / Dark switch (tokens with `light-dark()`, [theming](../FORMAT.md#theming)), WCAG 2.2 AA (axe-clean in both), usable at 320 px. The Dark *preview* is about the email and works whatever the tool's theme.
 - **Development only**: in production the routes don't exist (404, proven by a test).
 
 Extracted from Rust off Rails apps and rebuilt. Fixed on the way: an app moved the mailbox styles into `app.css`, which kernel pages never load, so the mailbox rendered unstyled; `<base target="_blank">` could land before the doctype (quirks mode); the inbox polled every 2 s per tab. Added: the live stream, codes, checks, previews in four widths and themes, keyboard, JSON filters and the CLI.
@@ -50,7 +50,7 @@ Through the samples MCP server: `get_sample dev-mailbox`. Or by hand, in the app
    - `src/kernel/introspect.rs`: `out["mailbox"]` with the counts.
    - `src/main.rs`: the `Mailbox { command }` subcommand and its dispatch arm.
    - `templates/layouts/application.html`: a footer link `<a href="{{ paths::dev_mailbox() }}" hx-boost="false" class="link">Mailbox</a>` next to Dev tools.
-   - `tests/app/main.rs`: `mod dev_mailbox_test;`; `tests/app/security_test.rs`: `"src/kernel/mailbox_web.rs"` in the route sources; `tests/app/kernel_web_test.rs`: the mailbox paths in the no-store list.
+   - `tests/app/main.rs`: `mod dev_mailbox_test;`; `tests/app/security_test.rs`: `"src/kernel/mailbox_web.rs"` in the route sources; `tests/app/kernel_web_test.rs`: the mailbox paths in the no-store list; `tests/app/theme_switch_test.rs`: `"/dev/mailbox"` and `"/dev/mailbox/previews"` in `KERNEL_PAGES`.
 4. `cargo fmt --all && cargo run -- routes` (rewrites `docs/routes.md`), then the Definition of Done.
 
 `tools/install.sh dev-mailbox <app>` installs mailer first if needed, then does steps 1 to 3.
@@ -67,6 +67,7 @@ Through the samples MCP server: `get_sample dev-mailbox`. Or by hand, in the app
 - **Detect your product's codes**: `WORDS` in `kernel/mailbox.rs` (from the mailer sample).
 - **Your own checks**: add a rule to `checks()` in `kernel/mailbox_web.rs` (`add("warn", …)`), and a case to `checks_flag_what_breaks_in_real_inboxes`.
 - **A mailbox on a staging server**: don't route this one there. Run staging with `MAILER=smtp` against a catcher (Mailpit), which is built for shared use; this mailbox assumes the only person who can reach it owns the machine.
+- **Brand tones**: the `--mbx-*` tokens at the top of `static/kernel/mailbox.css` (`/* APP: */`), each `light-dark(<light>, <dark>)`; the shared ones (`--accent`, `--panel`…) are in `admin.css`. Keep AA contrast in both and never add a `prefers-color-scheme` block (it ignores the theme switch).
 - **Assert on mail in end-to-end tests**: `GET /dev/mailbox.json?to=…&since=<id>` from the browser test, or `app.sent_emails()` in Rust tests.
 
 ## Do not change

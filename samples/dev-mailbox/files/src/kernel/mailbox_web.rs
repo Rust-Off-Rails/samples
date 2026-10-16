@@ -30,6 +30,7 @@ use crate::error::AppError;
 use crate::kernel::flash::{Flash, FlashMessage, RequestFlash};
 use crate::kernel::mailbox::{self, Model};
 use crate::kernel::mailer::{Attachment, Email, Mailer, Preview};
+use crate::kernel::theme::ThemeSwitch;
 use crate::kernel::ui::{self, Chrome};
 use crate::state::AppState;
 
@@ -499,10 +500,17 @@ fn preview_view(name: &str, email: &Email, from: &str, q: &ViewQuery) -> Message
     .counted()
 }
 
-fn chrome(state: &AppState, flash: Option<FlashMessage>) -> Chrome {
-    Chrome::new("Mailbox", "mailbox", state.assets.assets(), true, flash)
-        .stylesheet(state.assets.path("kernel/mailbox.css"))
-        .script(state.assets.path("kernel/mailbox.js"))
+fn chrome(state: &AppState, flash: Option<FlashMessage>, theme: ThemeSwitch) -> Chrome {
+    Chrome::new(
+        "Mailbox",
+        "mailbox",
+        state.assets.assets(),
+        true,
+        flash,
+        theme,
+    )
+    .stylesheet(state.assets.path("kernel/mailbox.css"))
+    .script(state.assets.path("kernel/mailbox.js"))
 }
 
 fn list_src(q: &str, selected: i64) -> String {
@@ -526,12 +534,13 @@ async fn inbox_page(
     q: &ViewQuery,
     selected: Option<Model>,
     flash: Option<FlashMessage>,
+    theme: ThemeSwitch,
 ) -> Result<Response, AppError> {
     let messages = mailbox::search(&state.db, &q.q, LIST_LIMIT).await?;
     let (total, unread) = mailbox::counts(&state.db).await?;
     let selected_id = selected.as_ref().map_or(0, |m| m.id);
     Ok(ui::page(IndexPage {
-        chrome: chrome(state, flash),
+        chrome: chrome(state, flash, theme),
         pane: "inbox",
         rows: rows(&messages, selected_id, &q.q),
         previews: Vec::new(),
@@ -552,6 +561,7 @@ async fn index(
     Extension(Previews(previews)): Extension<Previews>,
     Query(q): Query<ViewQuery>,
     flash: Option<Extension<RequestFlash>>,
+    theme: ThemeSwitch,
 ) -> Result<Response, AppError> {
     let newest = mailbox::search(&state.db, &q.q, 1)
         .await?
@@ -560,7 +570,15 @@ async fn index(
     if let Some(m) = &newest {
         mailbox::mark_read(&state.db, m.id).await?;
     }
-    inbox_page(&state, previews, &q, newest, flash.and_then(|f| f.0.0)).await
+    inbox_page(
+        &state,
+        previews,
+        &q,
+        newest,
+        flash.and_then(|f| f.0.0),
+        theme,
+    )
+    .await
 }
 
 /// `GET /dev/mailbox/{id}`: the inbox with message `id` open; opening marks it read. A message
@@ -571,6 +589,7 @@ async fn show(
     Path(id): Path<i64>,
     Query(q): Query<ViewQuery>,
     flash: Option<Extension<RequestFlash>>,
+    theme: ThemeSwitch,
 ) -> Result<Response, AppError> {
     let Some(mut m) = mailbox::find(&state.db, id).await? else {
         return Ok(gone(&q.q));
@@ -579,7 +598,15 @@ async fn show(
         mailbox::mark_read(&state.db, id).await?;
         m.read_at = Some(Utc::now());
     }
-    inbox_page(&state, previews, &q, Some(m), flash.and_then(|f| f.0.0)).await
+    inbox_page(
+        &state,
+        previews,
+        &q,
+        Some(m),
+        flash.and_then(|f| f.0.0),
+        theme,
+    )
+    .await
 }
 
 fn gone(q: &str) -> Response {
@@ -1037,6 +1064,7 @@ async fn previews_page(
     selected: Option<&'static Preview>,
     q: &ViewQuery,
     flash: Option<FlashMessage>,
+    theme: ThemeSwitch,
 ) -> Result<Response, AppError> {
     let message = match selected {
         Some(p) => {
@@ -1048,7 +1076,7 @@ async fn previews_page(
     };
     let (total, unread) = mailbox::counts(&state.db).await?;
     Ok(ui::page(IndexPage {
-        chrome: chrome(state, flash),
+        chrome: chrome(state, flash, theme),
         pane: "previews",
         rows: Vec::new(),
         previews: preview_rows(previews, selected.map(|p| p.name)),
@@ -1068,6 +1096,7 @@ async fn previews_index(
     Extension(Previews(previews)): Extension<Previews>,
     Query(q): Query<ViewQuery>,
     flash: Option<Extension<RequestFlash>>,
+    theme: ThemeSwitch,
 ) -> Result<Response, AppError> {
     previews_page(
         &state,
@@ -1075,6 +1104,7 @@ async fn previews_index(
         previews.first(),
         &q,
         flash.and_then(|f| f.0.0),
+        theme,
     )
     .await
 }
@@ -1094,6 +1124,7 @@ async fn preview_show(
     Path((mailer, action)): Path<(String, String)>,
     Query(q): Query<ViewQuery>,
     flash: Option<Extension<RequestFlash>>,
+    theme: ThemeSwitch,
 ) -> Result<Response, AppError> {
     let Some(p) = find_preview(previews, &mailer, &action) else {
         return Ok((
@@ -1102,7 +1133,15 @@ async fn preview_show(
         )
             .into_response());
     };
-    previews_page(&state, previews, Some(p), &q, flash.and_then(|f| f.0.0)).await
+    previews_page(
+        &state,
+        previews,
+        Some(p),
+        &q,
+        flash.and_then(|f| f.0.0),
+        theme,
+    )
+    .await
 }
 
 async fn preview_html(
