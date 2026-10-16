@@ -276,7 +276,11 @@ tr.current { background: var(--accent-bg); }
 @media (max-width: 600px) {
   .dash-nav { flex-wrap: nowrap; overflow-x: auto; }
   .dash-live { margin-left: .5rem; }
-  .card-value { font-size: 1.3rem; }
+  .cards { grid-template-columns: 1fr 1fr; gap: .5rem; }
+  .card a { min-height: 6.4rem; padding: .6rem .65rem 2.1rem; }
+  .card-value { font-size: 1.15rem; }
+  .card-sub { font-size: .72rem; }
+  .spark { height: 1.8rem; }
   .log { grid-template-columns: 5.6rem 3rem 1fr; }
   .log .target, .log .trace-link { display: none; }
   .scenarios li { grid-template-columns: 1fr; gap: .25rem; }

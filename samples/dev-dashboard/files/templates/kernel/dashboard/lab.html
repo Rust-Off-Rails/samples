@@ -1,6 +1,10 @@
 {% extends "kernel/dashboard/_layout.html" %}
 {% block dash %}
 <header class="dash-head"><h1>Load lab</h1><span class="muted">development only · fake data · this app's own address</span></header>
+<section class="panel" aria-labelledby="lab-run">
+    <header><h2 id="lab-run">Current run</h2></header>
+    <div class="pad" data-live="lab" aria-live="polite">{% include "kernel/dashboard/_lab_status.html" %}</div>
+</section>
 <div data-live="cards">{% include "kernel/dashboard/_cards.html" %}</div>
 <div class="grid two">
   <section class="panel" aria-labelledby="lab-scen">
@@ -13,10 +17,6 @@
       </li>
       {% endfor %}
     </ul>
-  </section>
-  <section class="panel" aria-labelledby="lab-run">
-    <header><h2 id="lab-run">Current run</h2></header>
-    <div class="pad" data-live="lab" aria-live="polite">{% include "kernel/dashboard/_lab_status.html" %}</div>
   </section>
   <section class="panel" aria-labelledby="lab-traffic">
     <header><h2 id="lab-traffic">Traffic</h2><span class="muted">at most {{ max_rps }} req/s for {{ max_secs }} s, 32 in flight</span></header>
