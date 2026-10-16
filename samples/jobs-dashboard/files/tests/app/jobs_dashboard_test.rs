@@ -288,6 +288,58 @@ async fn the_overview_shows_counts_charts_queues_workers_and_nodes() {
         .assert_text("Paused");
 }
 
+/// The legend sums up what the chart shows: queue wait p95 and p50 over the last 60 minutes, not
+/// the last minute (usually empty, which read "p95 0ms" beside a 8.1 s peak), and "—" with no
+/// data at all.
+#[tokio::test]
+async fn chart_legends_summarize_the_whole_window() {
+    use offrails_host::kernel::jobs::job;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, sea_query::Expr};
+
+    let app = TestApp::with_config(development()).await;
+    app.get_htmx("/admin/jobs?part=charts")
+        .await
+        .assert_ok()
+        .assert_contains("p95 <strong>—</strong>")
+        .assert_contains("p50 <strong>—</strong>")
+        .assert_contains("Completed <strong>0</strong>");
+
+    // Eight jobs started 20 minutes ago that waited 1 s … 8 s; nothing in the last minute.
+    let started = Utc::now() - chrono::Duration::minutes(20);
+    for wait_s in 1..=8_i64 {
+        let id = insert(
+            app.db(),
+            builder("export_report", json!({"report_id": wait_s})),
+        )
+        .await;
+        job::Entity::update_many()
+            .col_expr(job::Column::State, Expr::value(JobState::Completed))
+            .col_expr(job::Column::AttemptedAt, Expr::value(started))
+            .col_expr(job::Column::CompletedAt, Expr::value(started))
+            .col_expr(
+                job::Column::ScheduledAt,
+                Expr::value(started - chrono::Duration::seconds(wait_s)),
+            )
+            .filter(job::Column::Id.eq(id))
+            .exec(app.db())
+            .await
+            .unwrap();
+    }
+    let window = admin::throughput(app.db(), Utc::now(), 60).await.unwrap();
+    assert_eq!(window.buckets.last().unwrap().wait_p95_ms, None);
+    assert_eq!(
+        (window.wait_p50_ms, window.wait_p95_ms),
+        (Some(4_000), Some(8_000))
+    );
+    app.get_htmx("/admin/jobs?part=charts")
+        .await
+        .assert_ok()
+        .assert_contains("p95 <strong>8.0s</strong>")
+        .assert_contains("p50 <strong>4.0s</strong>")
+        .assert_contains("worst p95 8.0s")
+        .assert_contains("Completed <strong>8</strong>");
+}
+
 #[tokio::test]
 async fn every_fragment_renders_alone() {
     let app = TestApp::with_config(development()).await;

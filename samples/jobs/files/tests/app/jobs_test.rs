@@ -1195,7 +1195,9 @@ async fn stats_queues_metrics_and_error_groups() {
     assert_eq!(admin::pause_all(app.db()).await.unwrap(), 2);
     assert_eq!(admin::resume_all(app.db()).await.unwrap(), 2);
 
-    let buckets = admin::throughput(app.db(), Utc::now(), 60).await.unwrap();
+    let throughput = admin::throughput(app.db(), Utc::now(), 60).await.unwrap();
+    assert!(throughput.wait_p95_ms.is_some() && throughput.wait_p50_ms.is_some());
+    let buckets = throughput.buckets;
     assert_eq!(buckets.len(), 60);
     assert_eq!(buckets.iter().map(|b| b.completed).sum::<u64>(), 4);
     assert_eq!(buckets.iter().map(|b| b.failed).sum::<u64>(), 3);

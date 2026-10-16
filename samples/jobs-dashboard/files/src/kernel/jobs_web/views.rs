@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::kernel::{
     jobs::{
         JobState,
-        admin::{self, Bucket, ErrorGroup, JobFilter, NodeRow, QueueRow, WorkerStat},
+        admin::{self, Bucket, ErrorGroup, JobFilter, NodeRow, QueueRow, Throughput, WorkerStat},
         job, redact,
     },
     ui,
@@ -71,8 +71,11 @@ pub fn compact(n: u64) -> String {
     }
 }
 
+/// What a value with no data shows (a legend, a table cell). APP: the placeholder.
+pub const NO_DATA: &str = "—";
+
 pub fn ms(ms: Option<i64>) -> String {
-    ms.map_or_else(|| "–".to_owned(), ui::duration)
+    ms.map_or_else(|| NO_DATA.to_owned(), ui::duration)
 }
 
 fn short_args(args: &Value, max: usize) -> String {
@@ -139,7 +142,9 @@ pub struct Charts {
     pub p50: String,
     pub p95: String,
     pub wait_peak: String,
-    pub wait_p95_now: String,
+    /// Legend values: queue wait over the whole window.
+    pub wait_p95: String,
+    pub wait_p50: String,
     pub has_waits: bool,
     pub start_label: String,
     pub end_label: String,
@@ -148,7 +153,10 @@ pub struct Charts {
 pub const CHART_W: f64 = 600.0;
 pub const CHART_H: f64 = 120.0;
 
-pub fn charts(buckets: &[Bucket]) -> Charts {
+/// The overview's two charts. Legend values summarize the window the chart shows (the last 60
+/// minutes), never its last minute, which is often empty; `NO_DATA` when there is none.
+pub fn charts(t: &Throughput) -> Charts {
+    let buckets = &t.buckets;
     let n = buckets.len().max(1) as f64;
     let slot = CHART_W / n;
     let bar = (slot * 0.72).max(1.0);
@@ -238,7 +246,10 @@ pub fn charts(buckets: &[Bucket]) -> Charts {
         p95: line(|b| b.wait_p95_ms),
         has_waits: buckets.iter().any(|b| b.wait_p95_ms.is_some()),
         wait_peak: ui::duration(wait_peak),
-        wait_p95_now: ms(buckets.iter().rev().find_map(|b| b.wait_p95_ms)),
+        // INVARIANT: legend values summarize the shown window, not its last minute
+        // (test: chart_legends_summarize_the_whole_window)
+        wait_p95: ms(t.wait_p95_ms),
+        wait_p50: ms(t.wait_p50_ms),
         start_label: buckets
             .first()
             .map(|b| b.minute.format("%H:%M").to_string())
@@ -380,7 +391,7 @@ pub struct WorkerView {
     pub completed: String,
     pub failed: String,
     pub has_failures: bool,
-    /// "99.2%", or "–".
+    /// "99.2%", or `NO_DATA`.
     pub success: String,
     /// 0-1000, for `<meter>`.
     pub success_permille: u32,
@@ -402,7 +413,7 @@ pub fn workers(rows: Vec<WorkerStat>) -> Vec<WorkerView> {
                 has_failures: w.failed > 0,
                 success: w
                     .success_pct
-                    .map_or_else(|| "–".into(), |p| format!("{p:.1}%")),
+                    .map_or_else(|| NO_DATA.into(), |p| format!("{p:.1}%")),
                 success_permille: (pct * 10.0).round() as u32,
                 success_class: match pct {
                     p if p >= 99.0 => "ok",
@@ -724,7 +735,7 @@ pub fn job_view(
     // WHY: after a retry, scheduled_at is the *next* run, so the last wait isn't knowable.
     let queue_time = match j.attempted_at {
         Some(a) if a >= j.scheduled_at => ui::duration((a - j.scheduled_at).num_milliseconds()),
-        _ => "–".into(),
+        _ => NO_DATA.into(),
     };
     let run_time = match (j.attempted_at, j.finished_at()) {
         (Some(a), Some(f)) if j.state == JobState::Completed => {
@@ -736,7 +747,7 @@ pub fn job_view(
                 ui::duration((now - a).num_milliseconds().max(0))
             )
         }
-        _ => "–".into(),
+        _ => NO_DATA.into(),
     };
 
     let attempts_list = errors
@@ -829,12 +840,12 @@ pub fn job_view(
         when: when(j, now),
         attempts: format!("{} of {}", j.attempt, j.max_attempts),
         priority: j.priority,
-        node: j.attempted_by.clone().unwrap_or_else(|| "–".into()),
+        node: j.attempted_by.clone().unwrap_or_else(|| NO_DATA.into()),
         unique_key: j
             .unique_key
             .as_deref()
             .map(|k| format!("{}…", &k[..k.len().min(12)]))
-            .unwrap_or_else(|| "–".into()),
+            .unwrap_or_else(|| NO_DATA.into()),
         tags: j
             .tag_list()
             .into_iter()

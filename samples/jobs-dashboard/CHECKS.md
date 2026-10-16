@@ -50,6 +50,7 @@ The dashboard can retry, cancel, discard and delete work, pause every queue, and
 | The cron page shows next and last runs and runs an entry now | `the_cron_page_lists_next_runs_and_runs_an_entry_now` |
 | Queues pause and resume on every node; pause-all asks first and shows a banner | `queues_pause_and_resume_and_pause_all_asks_first` |
 | The demo task writes only synthetic URLs | `demo_urls_are_synthetic` |
+| Chart legends summarize the window the chart shows (queue wait p95 and p50 over the last 60 minutes), "—" with no data | `chart_legends_summarize_the_whole_window` |
 
 ## In a browser (not part of the test suite)
 

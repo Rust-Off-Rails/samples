@@ -253,13 +253,23 @@ pub fn percentile(sorted: &[i64], p: u32) -> Option<i64> {
     Some(sorted[rank.clamp(1, sorted.len()) - 1])
 }
 
-/// Per-minute completed/failed counts and queue-wait p50/p95 for the last `minutes`.
-/// Selects only timestamps and buckets in Rust: portable, fine up to ~100k jobs per window.
+/// The last `minutes`: one bucket per minute, and queue wait over the whole window.
+#[derive(Debug, Clone, Serialize)]
+pub struct Throughput {
+    pub buckets: Vec<Bucket>,
+    /// Queue wait of every job started in the window (not of one minute), `None` when none did.
+    pub wait_p50_ms: Option<i64>,
+    pub wait_p95_ms: Option<i64>,
+}
+
+/// Per-minute completed/failed counts and queue-wait p50/p95 for the last `minutes`, and the
+/// window's own wait percentiles. Selects only timestamps and buckets in Rust: portable, fine up
+/// to ~100k jobs per window.
 pub async fn throughput(
     db: &DatabaseConnection,
     now: DateTime<Utc>,
     minutes: i64,
-) -> Result<Vec<Bucket>, DbErr> {
+) -> Result<Throughput, DbErr> {
     let minutes = minutes.clamp(1, 24 * 60);
     let end = now
         .with_second(0)
@@ -325,7 +335,9 @@ pub async fn throughput(
             waits[i].push(std::cmp::max((attempted - scheduled).num_milliseconds(), 0));
         }
     }
-    Ok((0..minutes as usize)
+    let mut all: Vec<i64> = waits.iter().flatten().copied().collect();
+    all.sort_unstable();
+    let buckets = (0..minutes as usize)
         .map(|i| {
             waits[i].sort_unstable();
             Bucket {
@@ -336,7 +348,14 @@ pub async fn throughput(
                 wait_p95_ms: percentile(&waits[i], 95),
             }
         })
-        .collect())
+        .collect();
+    Ok(Throughput {
+        buckets,
+        // INVARIANT: a summary of the window is computed over the window's values, never taken
+        // from one minute (test: chart_legends_summarize_the_whole_window)
+        wait_p50_ms: percentile(&all, 50),
+        wait_p95_ms: percentile(&all, 95),
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
