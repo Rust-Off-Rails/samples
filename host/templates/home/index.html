@@ -1,0 +1,8 @@
+{% extends "layouts/application.html" %}
+{% block content %}
+<section class="py-10">
+  <h1 class="text-3xl font-semibold tracking-tight">{{ crate::config::APP_NAME }}</h1>
+  <p class="mt-4 text-gray-700 dark:text-gray-300">A blank Rust off Rails app, exactly as <code>generators/new.md</code> makes one. Every sample installs into it and is tested here, on SQLite and on Postgres.</p>
+  <p class="mt-4 text-sm text-gray-600 dark:text-gray-400">Edit <code>product/</code> to say what this app is for.</p>
+</section>
+{% endblock %}

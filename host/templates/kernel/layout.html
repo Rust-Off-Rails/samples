@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="robots" content="noindex">
+  <meta name="htmx-config" content='{"allowEval":false,"includeIndicatorStyles":false,"historyCacheSize":0}'>
+  <title>{{ chrome.title }} · {{ chrome.app_name }}</title>
+  <link rel="icon" href="{{ chrome.assets.favicon_svg }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ chrome.assets.admin_css }}">
+  {% for href in chrome.stylesheets %}<link rel="stylesheet" href="{{ href }}">
+  {% endfor %}
+  <script src="{{ chrome.assets.htmx }}" defer></script>
+  <script src="{{ chrome.assets.admin_js }}" defer></script>
+  {% for src in chrome.scripts %}<script src="{{ src }}" defer></script>
+  {% endfor %}
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="bar">
+    <a class="brand" href="/">{{ chrome.app_name }}</a>
+    <nav aria-label="Tools">
+      {% for tab in chrome.tabs %}<a href="{{ tab.href }}"{% if tab.active %} aria-current="page"{% endif %}>{{ tab.label }}</a>{% endfor %}
+    </nav>
+    <a class="back" href="/">&larr; App</a>
+  </header>
+  {% if let Some(flash) = chrome.flash %}
+    <div class="flash {% if flash.is_alert() %}flash-alert{% else %}flash-notice{% endif %}" role="status">{{ flash.message }}</div>
+  {% endif %}
+  <main id="main">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

@@ -1,0 +1,6 @@
+# The vendored framework is fetched by tools/vendor-framework.sh (a verified release), never committed.
+/host/.offrails/
+# tools/demo.sh builds the demo app here; tools/ci.sh shares one build cache.
+/demo/
+/.cache/
+/tools/screenshots/node_modules/
