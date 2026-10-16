@@ -101,6 +101,7 @@ The anchors `host/` provides (each file says what goes there):
 | `tests/app/factories.rs` | `factories` |
 | `tests/app/security_test.rs` | `router sources` (files that mount routes, for the ROUTES check) |
 | `tests/app/kernel_web_test.rs` | `no-store paths` |
+| `tests/app/theme_switch_test.rs` | `kernel pages` (every full page a sample renders in the kernel layout) |
 | `.env.example` | `env` |
 | `compose.yaml` | `compose env` |
 
@@ -122,6 +123,28 @@ Samples are read and adapted by models of every size. These markers tell a model
 - Dense where it matters, absent where the code is obvious. Never narrate what the next line does.
 - Every `// SECURITY:` marker ends with `(test: <name>)`, and every `(test: <name>)` (in SECURITY and INVARIANT markers, and every test named in a CHECKS.md table) names a test that exists. `tools/security-check.sh` fails otherwise.
 - READMEs link guides by their public URL too: `https://rustoffrails.org/docs/<guide>` (e.g. `https://rustoffrails.org/docs/mailers`).
+
+## Theming
+
+Kernel pages (and the app layout and error pages) have one theme: System, Light or Dark, chosen with the switch in the kernel header. A sample with UI follows it; it never adds a theme mechanism of its own.
+
+- **The choice is a cookie:** `offrails_theme=system|light|dark` (`Path=/`, `SameSite=Lax`, a year, not HttpOnly; `src/kernel/theme.rs`). An unknown value means System.
+- **The server renders it:** `<html data-theme="…">` and `<meta name="color-scheme">` on every page, so the first paint is right with no inline script (the CSP forbids those). A kernel handler takes the `ThemeSwitch` extractor and passes it to `Chrome::new`; the layout does the rest. A page that answers a POST (a confirmation) sets `return_to` to a GET page.
+- **Without JS** the switch is a `POST /theme` form (CSRF-checked like every POST, `return_to` same-site only). **With JS** (`static/kernel/admin.js`) it switches instantly, writes the same cookie and dispatches `themechange` on `document`, with `detail = { theme, scheme }` (`scheme` is what shows now, `light` or `dark`). It fires again when the OS flips while the choice is System.
+- **CSS:** each color token is defined **once**, with `light-dark(<light>, <dark>)`, on `:root` in the sample's own stylesheet; `admin.css` sets `color-scheme` (`light dark`, or `light` / `dark` under `:root[data-theme]`), which picks the side. Never write a `@media (prefers-color-scheme: dark)` color block: it ignores the switch. Shadows take `light-dark()` in their color. An element that pins its own `color-scheme` (an email preview frame) resolves `light-dark()` by that scheme, so give it fixed colors.
+- **JS that reads colors** (`getComputedStyle`, a canvas chart) re-reads them in a `themechange` listener. SVG styled by CSS classes needs nothing.
+- **Brand tones** are the `/* APP: */` token blocks: the shared ones at the top of `static/kernel/admin.css` (`--accent`, `--panel`, …), a sample's own at the top of its stylesheet (`--mbx-*` in `mailbox.css`, `--st-*` and `--chart-*` in `jobs.css`). Change both sides of each `light-dark()` and keep WCAG 2.2 AA in both (axe with the OS light and dark, and with the switch forcing each).
+- **Tests:** add the sample's page paths at `samples: kernel pages` (`every_kernel_page_renders_data_theme` checks each renders `data-theme` and the switch), and assert its stylesheet has no `prefers-color-scheme` block.
+- **App pages (Tailwind `dark:`)** follow the same switch. `templates/layouts/application.html` renders `data-theme` from the cookie (`ctx.theme`), and `assets/app.css` defines the one `dark` variant (Tailwind 4, verified with 4.3.3; `.offrails/guides/views.md#dark-mode`):
+  ```css
+  @custom-variant dark {
+    &:where([data-theme=dark], [data-theme=dark] *) { @slot; }
+    @media (prefers-color-scheme: dark) {
+      &:where(:root:not([data-theme=light]), :root:not([data-theme=light]) *) { @slot; }
+    }
+  }
+  ```
+  `data-theme=dark` forces dark, `light` forces light, `system` follows the OS. A sample's app pages just use `dark:` classes; `tailwind_dark_utilities_follow_the_theme_switch` checks the built CSS carries both selectors.
 
 ## README.md
 
