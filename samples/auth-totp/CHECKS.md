@@ -47,6 +47,7 @@ What "working and safe" means for two-factor authentication, and the test that a
 | Recovery codes use unambiguous characters and normalize case, spaces and dashes | `codes_are_readable_and_normalize` |
 | A recovery code also confirms identity (lost phone) | `a_recovery_code_also_confirms_identity` |
 | The account page shows "Used X of 10" | `a_recovery_code_works_only_once` |
+| The two-factor pages follow the theme switch | `two_factor_pages_follow_the_theme_switch` |
 
 ## Known limits (accepted, documented)
 

@@ -1029,7 +1029,7 @@ impl LogCapture {
         let sink = file.reopen().expect("reopen");
         let subscriber = tracing_subscriber::fmt()
             .with_env_filter(tracing_subscriber::EnvFilter::new(
-                "trace,tower_http=info,hyper=info,h2=info",
+                "trace,hyper=info,h2=info",
             ))
             .with_ansi(false)
             .with_writer(move || sink.try_clone().expect("clone log file"))
@@ -1079,4 +1079,27 @@ async fn session_tokens_never_reach_the_logs() {
     let not_me = link.trim_start_matches("/security/not-me/").to_owned();
     app.post_form(&link, &[]).await;
     logs.assert_absent(&[&raw, &not_me]);
+}
+
+/// Every page in `paths` renders `<html data-theme>` from the `offrails_theme` cookie: auth pages
+/// use the app layout, which follows the kernel header's theme switch (samples/FORMAT.md#theming).
+pub async fn assert_pages_follow_the_theme(app: &TestApp, paths: &[&str]) {
+    for theme in ["system", "light", "dark"] {
+        app.set_cookie("offrails_theme", theme);
+        for path in paths {
+            app.get(path)
+                .await
+                .assert_ok()
+                .assert_contains(&format!(r#"<html lang="en" data-theme="{theme}">"#));
+        }
+    }
+}
+
+#[tokio::test]
+async fn auth_pages_follow_the_theme_switch() {
+    let app = TestApp::new().await;
+    assert_pages_follow_the_theme(&app, &["/session/new"]).await;
+    let user = factories::user(app.db(), "ada@example.com").await;
+    app.sign_in_as(&user).await;
+    assert_pages_follow_the_theme(&app, &["/account", "/account/email/edit"]).await;
 }

@@ -40,6 +40,7 @@ Through the samples MCP server: `get_sample auth-magic-link`. By hand, in the ap
    - `src/routes.rs`: the routes below, their `paths::` helpers and `ROUTES` rows.
    - auth-core's files: the email form in `templates/sessions/new.html` (`sign in alternatives`); "Email me a code" in `templates/account/confirm.html` (`confirm alternatives`); expired links in `src/tasks/auth_cleanup.rs`.
    - `migration/src/lib.rs`: the `login_links` migration; `.env.example`: `APP_MAGIC_LINK_ANY_BROWSER`.
+   - `src/kernel/redact.rs`: `/login_links/{token}` in `TOKEN_ROUTES`, so logs show `[redacted]` for it.
    - `tests/app/main.rs`: `mod auth_magic_link_test;`.
 4. `cargo fmt --all && cargo run -- db migrate && cargo run -q -- routes`, then the Definition of Done.
 

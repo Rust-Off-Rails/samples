@@ -51,6 +51,7 @@ Through the samples MCP server: `get_sample auth-password` (or `auth-magic-link`
    - `src/tasks/mod.rs`: the `auth_cleanup` and `auth_demo` tasks.
    - `migration/src/lib.rs`: the four migrations.
    - `.env.example`, `compose.yaml`: `APP_SECRET_KEY`.
+   - `src/kernel/redact.rs`: the two token routes (`/account/email/confirm/{token}`, `/security/not-me/{token}`) in `TOKEN_ROUTES`, so logs show `[redacted]` for them.
    - `tests/app/main.rs`: `mod auth_core_test;`; `tests/app/factories.rs`: `user()`; `tests/app/support.rs`: `settle`, `sign_in_as`, `emails_to`, `link_in`.
 4. `cargo fmt --all && cargo run -- db migrate && cargo run -q -- routes`, then the Definition of Done (`.offrails/workflow.md`).
 

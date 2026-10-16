@@ -810,3 +810,16 @@ async fn a_signup_never_overwrites_a_verified_accounts_password() {
             .ok
     );
 }
+
+#[tokio::test]
+async fn password_pages_follow_the_theme_switch() {
+    let app = TestApp::new().await;
+    crate::auth_core_test::assert_pages_follow_the_theme(
+        &app,
+        &["/registration/new", "/passwords/new"],
+    )
+    .await;
+    let user = factories::user(app.db(), "ada@example.com").await;
+    app.sign_in_as(&user).await;
+    crate::auth_core_test::assert_pages_follow_the_theme(&app, &["/account/password/edit"]).await;
+}

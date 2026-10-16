@@ -497,3 +497,11 @@ async fn a_reauth_code_only_confirms_its_own_account() {
         .await
         .assert_redirect_to("/account/confirm");
 }
+
+#[tokio::test]
+async fn magic_link_pages_follow_the_theme_switch() {
+    let app = TestApp::new().await;
+    crate::auth_core_test::assert_pages_follow_the_theme(&app, &["/session/new"]).await;
+    mail_for(&app, "ada@example.com").await;
+    crate::auth_core_test::assert_pages_follow_the_theme(&app, &["/login_links/sent"]).await;
+}

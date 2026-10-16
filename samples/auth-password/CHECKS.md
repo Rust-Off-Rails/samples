@@ -58,6 +58,7 @@ What "working and safe" means for email + password accounts, and the test that a
 | Sign-in honors return-to (local paths only) | `password_sign_in_starts_a_session_and_honors_return_to` |
 | A passwordless (magic-link) account can add a password | `a_passwordless_account_can_set_a_password` |
 | A first sign-in sends no "new device" email; a new browser does | `a_new_device_gets_a_sign_in_notice_and_a_known_one_doesnt` |
+| Sign-up, reset and change-password pages follow the theme switch | `password_pages_follow_the_theme_switch` |
 
 ## Known limits (accepted, documented)
 

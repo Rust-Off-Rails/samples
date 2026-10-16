@@ -240,6 +240,15 @@ Box::new(m20261016_002000_create_password_credentials::Migration),
 '''
 
 [[wire]]
+file = "src/kernel/redact.rs"
+anchor = "token routes"
+text = '''
+"/email-verification/{token}",
+"/passwords/{token}/edit",
+"/passwords/{token}",
+'''
+
+[[wire]]
 file = "tests/app/main.rs"
 anchor = "test mods"
 text = '''

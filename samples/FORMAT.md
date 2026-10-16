@@ -82,6 +82,7 @@ The anchors `host/` provides (each file says what goes there):
 | `src/kernel/mod.rs` | `kernel mods` |
 | `src/kernel/ui.rs` | `kernel tabs` (a `Tab { … }` in the kernel header) |
 | `src/kernel/introspect.rs` | `introspect sections` (`out["x"] = …;`) |
+| `src/kernel/redact.rs` | `token routes` (a route pattern whose `{token}` segment is a secret, e.g. `"/login_links/{token}",`: logs show it as `[redacted]`) |
 | `src/config.rs` | `config fields`, `config debug`, `config parse`, `config init`, `config test`, `config sections` (a sample's own config struct, appended) |
 | `src/state.rs` | `state fields`, `state build`, `state init`, `state fns` |
 | `src/routes.rs` | `routes` (`app = app.route(…)`), `dev routers` (merged in development only), `paths`, `routes table` (`ROUTES` rows) |

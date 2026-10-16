@@ -44,6 +44,7 @@ Through the samples MCP server: `get_sample auth-password`. By hand, in the app 
    - `src/routes.rs`: the routes below, their `paths::` helpers and `ROUTES` rows.
    - auth-core's files: the password form in `templates/sessions/new.html` (`sign in methods`) and the sign-up link (`sign in links`); "Sign up" in `templates/shared/_auth_nav.html`; the password card on the account page (`account fields` in `src/views/auth.rs`, `account load`/`account init` in `src/controllers/account.rs`, `account sections` in `templates/account/show.html`); the password form on "Confirm it's you" (`confirm fields`, `confirm load`, `confirm init`, `confirm methods`); the demo password in `src/tasks/auth_demo.rs`.
    - `migration/src/lib.rs`: the `password_credentials` migration.
+   - `src/kernel/redact.rs`: `/email-verification/{token}`, `/passwords/{token}/edit` and `/passwords/{token}` in `TOKEN_ROUTES`, so logs show `[redacted]` for them.
    - `tests/app/main.rs`: `mod auth_password_test;`; `tests/app/factories.rs`: `PASSWORD` and `user_with_password()`.
 4. `cargo fmt --all && cargo run -- db migrate && cargo run -q -- routes`, then the Definition of Done.
 

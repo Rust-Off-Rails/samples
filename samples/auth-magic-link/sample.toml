@@ -190,6 +190,13 @@ text = '''
 '''
 
 [[wire]]
+file = "src/kernel/redact.rs"
+anchor = "token routes"
+text = '''
+"/login_links/{token}",
+'''
+
+[[wire]]
 file = "tests/app/main.rs"
 anchor = "test mods"
 text = '''

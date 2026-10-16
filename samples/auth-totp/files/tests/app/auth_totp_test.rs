@@ -697,3 +697,11 @@ async fn totp_secrets_and_codes_never_reach_the_logs() {
     secrets.extend(recovery.iter().map(String::as_str));
     logs.assert_absent(&secrets);
 }
+
+#[tokio::test]
+async fn two_factor_pages_follow_the_theme_switch() {
+    let app = TestApp::new().await;
+    let user = factories::user(app.db(), "ada@example.com").await;
+    app.sign_in_as(&user).await;
+    crate::auth_core_test::assert_pages_follow_the_theme(&app, &["/account/two-factor/new"]).await;
+}

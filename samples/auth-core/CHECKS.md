@@ -61,6 +61,7 @@ What "working and safe" means for the shared accounts layer, and the test that p
 | Security emails have an HTML and a text part, absolute links, and escape what they show | `notices_carry_an_absolute_not_me_link_and_no_markup_injection` |
 | Background emails finish before `settle()` returns | `idle_waits_for_spawned_work` |
 | Emails are normalized (trimmed, lowercased) everywhere | `normalizes_and_validates` |
+| Auth pages use the app layout and follow the kernel theme switch (`data-theme` from the cookie) | `auth_pages_follow_the_theme_switch` |
 
 ## Known limits (accepted, documented)
 

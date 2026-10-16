@@ -372,6 +372,14 @@ APP_SECRET_KEY: ${APP_SECRET_KEY:?set APP_SECRET_KEY (openssl rand -base64 48)}
 '''
 
 [[wire]]
+file = "src/kernel/redact.rs"
+anchor = "token routes"
+text = '''
+"/account/email/confirm/{token}",
+"/security/not-me/{token}",
+'''
+
+[[wire]]
 file = "tests/app/main.rs"
 anchor = "test mods"
 text = '''

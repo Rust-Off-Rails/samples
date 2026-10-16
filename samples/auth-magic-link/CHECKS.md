@@ -43,6 +43,7 @@ What "working and safe" means for passwordless sign-in, and the test that attack
 | Sign-in by link honors return-to | `sign_in_by_link_honors_return_to` |
 | The sent page has the code form, and the dev mailbox hint in development only | `the_sent_page_shows_the_code_form_and_the_dev_mailbox_hint_in_development` |
 | Browser binding can be lifted by configuration only | `any_browser_can_be_allowed_by_config` |
+| The sign-in and "check your mailbox" pages follow the theme switch | `magic_link_pages_follow_the_theme_switch` |
 
 ## Known limits (accepted, documented)
 
