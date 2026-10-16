@@ -92,6 +92,12 @@ fi
 if grep -q "installed sample jobs-dashboard " docs/decisions.md; then
   "$demo/app-bin" task jobs_demo >/dev/null
 fi
+if grep -q "installed sample dev-dashboard " docs/decisions.md; then
+  # Fake orders, synthetic test runs, a recorded GitHub repo, and a current docs/routes.md.
+  "$demo/app-bin" dashboard demo >/dev/null
+  printf 'GITHUB_REPO=example-org/example-app\nDASHBOARD_GITHUB_FIXTURE=tests/fixtures/github\n' >> .env
+  "$demo/app-bin" routes >/dev/null
+fi
 
 nohup "$demo/app-bin" serve > "$demo/demo.log" 2>&1 &
 echo $! > "$pidfile"
@@ -106,4 +112,8 @@ until curl -fsS "$url/up" >/dev/null 2>&1; do
   fi
   sleep 1
 done
+if grep -q "installed sample dev-dashboard " docs/decisions.md; then
+  # A short burst of traffic and every scenario, so the dashboard's charts aren't empty.
+  "$demo/app-bin" dashboard warmup --url "$url" --secs 15 >/dev/null
+fi
 echo "demo running: $url (PID $(cat "$pidfile")); stop with tools/demo.sh stop"

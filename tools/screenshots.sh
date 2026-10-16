@@ -18,3 +18,8 @@ if [ $# -eq 0 ] || printf '%s\n' "$@" | grep -qx jobs-dashboard; then
     BASE="$base" OUT="$root/docs/screenshots/jobs-dashboard" node tools/screenshots/shoot-jobs-dashboard.mjs
   fi
 fi
+if [ $# -eq 0 ] || printf '%s\n' "$@" | grep -qx dev-dashboard; then
+  if grep -q "installed sample dev-dashboard " demo/app/docs/decisions.md 2>/dev/null; then
+    BASE="$base" OUT="$root/docs/screenshots/dev-dashboard" node tools/screenshots/shoot-dev-dashboard.mjs
+  fi
+fi
