@@ -61,9 +61,26 @@ step() {
 }
 
 # The files a sample ships must come out of `cargo fmt` unchanged: shipped code is formatted.
+# A shipped file that another installed sample wires into (a `[[wire]] file =`, e.g. mailer's
+# src/mailers/previews.rs once auth-core is in) legitimately differs from it in the app, so the
+# comparison with the app's copy skips it; rustfmt checks the shipped file by itself instead.
 check_formatted() {
+  installed=$(sed -n 's/^.*: installed sample \([^ ]*\) .*$/\1/p' "$app/docs/decisions.md")
+  wired=$(for i in $installed; do
+    sed -n 's/^file = "\(.*\)"[[:space:]]*$/\1/p' "$root/samples/$i/sample.toml"
+  done | sort -u)
   for s in $1; do
     (cd "$root/samples/$s/files" && find . -name '*.rs' -type f | sed 's|^\./||') | while IFS= read -r f; do
+      if printf '%s\n' "$wired" | grep -qxF "$f"; then
+        # Still rustfmt-clean as shipped: stdin mode formats the file alone (no `mod` lookups).
+        (cd "$app" && rustfmt --edition 2024 --emit stdout < "$root/samples/$s/files/$f" > "$app/../shipped-fmt.rs" 2>/dev/null) || true
+        if ! cmp -s "$app/../shipped-fmt.rs" "$root/samples/$s/files/$f"; then
+          echo "samples/$s/files/$f is not rustfmt-formatted as shipped" >&2
+          return 1
+        fi
+        echo "fmt: samples/$s/files/$f checked as shipped (another installed sample wires into it)"
+        continue
+      fi
       crate=$(awk '/^\[package\]/ { p = 1; next } /^\[/ { p = 0 } p && $1 == "name" { gsub(/[" ]/, "", $3); print $3; exit }' "$app/Cargo.toml")
       if ! sed "s/offrails_host/$crate/g" "$root/samples/$s/files/$f" | cmp -s - "$app/$f"; then
         echo "samples/$s/files/$f is not rustfmt-formatted (run cargo fmt in an installed app and copy it back)" >&2
