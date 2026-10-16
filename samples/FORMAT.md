@@ -105,6 +105,13 @@ The anchors `host/` provides (each file says what goes there):
 | `.env.example` | `env` |
 | `compose.yaml` | `compose env` |
 
+Samples that own a shared file add anchors of their own for the samples that depend on them:
+
+| File | Sample | Anchors |
+|------|--------|---------|
+| `src/mailers/mod.rs` | mailer | `mailer mods` (`pub mod <name>_mailer;`) |
+| `src/mailers/previews.rs` | mailer | `previews` (a `Preview { … },` in `PREVIEWS`) |
+
 An app made by `generators/new.md` before 0.7.0 has no anchors. Then `install.sh` refuses and names each missing anchor; the agent applies that wiring by hand at the spot the anchor table describes (README "Wiring" says it in words for every insertion).
 
 ## Comments that guide the next model

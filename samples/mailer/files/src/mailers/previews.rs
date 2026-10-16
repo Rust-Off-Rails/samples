@@ -7,7 +7,10 @@ pub use crate::kernel::mailer::Preview;
 use crate::mailers::test_mailer;
 
 // APP: one entry per mailer action, built from fake data (never the database).
-pub const PREVIEWS: &[Preview] = &[Preview {
-    name: "test_mailer/test_email",
-    build: |s| Box::pin(async { test_mailer::test_email(&s.config, "ada@example.com") }),
-}];
+pub const PREVIEWS: &[Preview] = &[
+    Preview {
+        name: "test_mailer/test_email",
+        build: |s| Box::pin(async { test_mailer::test_email(&s.config, "ada@example.com") }),
+    },
+    // samples: previews
+];
