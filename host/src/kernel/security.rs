@@ -35,6 +35,12 @@ const PERMISSIONS_POLICY: &str = "camera=(), microphone=(), geolocation=(), paym
                                   serial=(), bluetooth=(), hid=(), midi=(), browsing-topics=()";
 const HSTS: &str = "max-age=63072000; includeSubDomains";
 
+/// Directives a sample adds to the CSP in development only (a violation report endpoint:
+/// `"report-uri /dev/csp-reports"`). Production never gets them.
+pub const DEV_CSP_EXTRA: &[&str] = &[
+    // samples: dev csp
+];
+
 /// What the middleware needs from the config, computed once.
 #[derive(Clone)]
 pub struct Hardening {
@@ -54,11 +60,17 @@ impl Hardening {
                 "APP_URL is not https: HSTS and upgrade-insecure-requests are off"
             );
         }
-        let csp = if tls {
+        let mut csp = if tls {
             format!("{CSP}; upgrade-insecure-requests")
         } else {
             CSP.to_owned()
         };
+        if config.is_development() {
+            for directive in DEV_CSP_EXTRA {
+                csp.push_str("; ");
+                csp.push_str(directive);
+            }
+        }
         Self {
             csp: HeaderValue::from_str(&csp).unwrap_or(HeaderValue::from_static(CSP)),
             hsts: HeaderValue::from_static(if tls { HSTS } else { "max-age=0" }),
