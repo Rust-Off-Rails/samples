@@ -81,3 +81,10 @@ tbody tr:hover { background: var(--hover); }
 .timeline { margin: 0; padding: .75rem 1rem .75rem 2rem; font-size: .88rem; }
 .code { margin: 0; padding: .75rem 1rem; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
 .confirm { max-width: 640px; padding: 1rem 1.25rem; }
+
+/* phones: brand and "App" on one row, the tabs on their own scrollable row */
+@media (max-width: 600px) {
+  .bar { gap: .25rem .75rem; padding: .5rem .75rem; }
+  .bar nav { order: 3; flex-basis: 100%; flex-wrap: nowrap; overflow-x: auto; margin: 0 -.25rem; }
+  .bar .back { margin-left: auto; }
+}
