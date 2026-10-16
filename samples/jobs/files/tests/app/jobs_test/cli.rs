@@ -97,7 +97,8 @@ async fn stats_list_and_show_print_tables_and_json() {
 
     let out = jobs(&app, &["errors"]).await.unwrap();
     assert!(
-        out.contains("deliver_webhook") && out.contains("connecting to down.invalid:N"),
+        out.contains("deliver_webhook")
+            && out.contains("connection refused (os error N) · down.invalid"),
         "{out}"
     );
 }

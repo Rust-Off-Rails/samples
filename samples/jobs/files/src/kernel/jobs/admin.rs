@@ -449,8 +449,17 @@ pub async fn running(db: &DatabaseConnection, limit: u64) -> Result<Vec<job::Mod
 #[derive(Debug, Clone, Serialize)]
 pub struct ErrorGroup {
     pub worker: String,
-    /// The last error's first line, numbers replaced by `N`.
+    /// The root cause and the host it involved: `connection refused (os error N) · hooks.example.com`.
     pub message: String,
+    /// The innermost error of the chain, numbers replaced by `N`.
+    pub root: String,
+    /// The host or URL host the error names, when it names one.
+    pub host: Option<String>,
+    /// What differs between the group's errors in their outer context (`order.paid`,
+    /// `order.refunded`), at most `MAX_VARIANTS`, in first-seen order.
+    pub variants: Vec<String>,
+    /// How many distinct outer contexts the group has (may exceed `variants.len()`).
+    pub variant_count: usize,
     pub count: u64,
     pub retryable: u64,
     pub discarded: u64,
@@ -460,6 +469,83 @@ pub struct ErrorGroup {
     pub example_id: i64,
     /// A literal fragment of the message for the list's `error` filter, when one is usable.
     pub search: Option<String>,
+}
+
+/// Variants listed per error group; the count says how many more there are.
+pub const MAX_VARIANTS: usize = 8;
+
+/// `(outer context, innermost cause)` of an error chain as `{e:#}` prints it
+/// (`"POST …: connecting to …: connection refused"`). Without a chain, the context is empty.
+pub fn split_root_cause(message: &str) -> (&str, &str) {
+    let line = message.lines().next().unwrap_or_default().trim();
+    match line.rfind(": ") {
+        Some(at) if at + 2 < line.len() => (&line[..at], &line[at + 2..]),
+        _ => ("", line),
+    }
+}
+
+/// The host an error names: the host of its first URL, else the first `name.tld:port` token.
+pub fn error_host(message: &str) -> Option<String> {
+    let line = message.lines().next().unwrap_or_default();
+    if let Some(at) = line.find("://") {
+        let host: String = line[at + 3..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
+            .collect();
+        if host.contains('.') {
+            return Some(host.to_lowercase());
+        }
+    }
+    line.split(|c: char| c.is_whitespace() || matches!(c, '(' | ')' | ',' | '"' | '\''))
+        .filter_map(|token| {
+            let (host, port) = token.trim_end_matches(':').rsplit_once(':')?;
+            (host.contains('.')
+                && !port.is_empty()
+                && port.chars().all(|c| c.is_ascii_digit())
+                && host
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-')))
+            .then(|| host.to_lowercase())
+        })
+        .next()
+}
+
+/// The part of each string that differs from the others (their common prefix and suffix cut
+/// at word boundaries): `["… (order.paid): x", "… (order.refunded): x"]` → `["order.paid",
+/// "order.refunded"]`. Empty strings stay empty.
+pub fn distinct_parts(values: &[String]) -> Vec<String> {
+    if values.len() < 2 {
+        return values.to_vec();
+    }
+    let word = |c: char| c.is_alphanumeric() || matches!(c, '.' | '_' | '-');
+    let chars: Vec<Vec<char>> = values.iter().map(|v| v.chars().collect()).collect();
+    let shortest = chars.iter().map(Vec::len).min().unwrap_or(0);
+    let mut prefix = 0;
+    while prefix < shortest && chars.iter().all(|c| c[prefix] == chars[0][prefix]) {
+        prefix += 1;
+    }
+    // Back to a word boundary, so "order.paid" / "order.refunded" keep "order.".
+    while prefix > 0 && word(chars[0][prefix - 1]) {
+        prefix -= 1;
+    }
+    let mut suffix = 0;
+    while suffix < shortest - prefix
+        && chars
+            .iter()
+            .all(|c| c[c.len() - 1 - suffix] == chars[0][chars[0].len() - 1 - suffix])
+    {
+        suffix += 1;
+    }
+    while suffix > 0 && word(chars[0][chars[0].len() - suffix]) {
+        suffix -= 1;
+    }
+    chars
+        .iter()
+        .map(|c| {
+            let part: String = c[prefix..c.len() - suffix].iter().collect();
+            part.trim().to_owned()
+        })
+        .collect()
 }
 
 /// First line, numbers → `N`, at most 160 characters: "same error, different ids".
@@ -493,20 +579,56 @@ pub fn error_signature(message: &str) -> String {
     super::executor::truncate(out.trim(), 160)
 }
 
-/// The longest literal start of `message` before anything that varies (a digit) or would be
-/// escaped in the stored JSON (a quote, a backslash, a newline).
+/// The longest literal run of `message` that every error of its group shares: it stops at
+/// numbers the signature replaces by `N` (ids vary; in-word digits and HTTP statuses don't) and
+/// at characters the stored JSON escapes (quotes, backslashes, control characters).
 fn search_fragment(message: &str) -> Option<String> {
-    let cut: String = message
-        .chars()
-        .take_while(|c| !c.is_ascii_digit() && !matches!(c, '"' | '\\' | '\n' | '\r' | '\t'))
-        .take(80)
-        .collect();
-    let cut = cut.trim().to_owned();
-    (cut.chars().count() >= 6).then_some(cut)
+    let chars: Vec<char> = message.lines().next().unwrap_or_default().chars().collect();
+    let mut runs: Vec<String> = vec![String::new()];
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if matches!(c, '"' | '\\') || c.is_control() {
+            runs.push(String::new());
+            i += 1;
+            continue;
+        }
+        if c.is_ascii_digit() {
+            let start = i;
+            while i < chars.len() && chars[i].is_ascii_digit() {
+                i += 1;
+            }
+            let run: String = chars[start..i].iter().collect();
+            let current = runs.last_mut().map(|r| r.as_str()).unwrap_or_default();
+            let in_word = start > 0 && chars[start - 1].is_ascii_alphabetic();
+            let status = run.len() == 3 && current.ends_with("HTTP ");
+            if in_word || status {
+                if let Some(r) = runs.last_mut() {
+                    r.push_str(&run);
+                }
+            } else {
+                runs.push(String::new());
+            }
+            continue;
+        }
+        if let Some(r) = runs.last_mut() {
+            r.push(c);
+        }
+        i += 1;
+    }
+    let best = runs
+        .into_iter()
+        .map(|r| r.trim().chars().take(80).collect::<String>())
+        .max_by_key(|r| r.chars().count())?;
+    (best.chars().count() >= 6).then_some(best)
 }
 
-/// Failing jobs (retryable and discarded) grouped by worker and last-error signature, largest
-/// group first. Reads the newest `limit` failing jobs.
+/// Failing jobs (retryable and discarded) grouped by worker and the **root cause** of their last
+/// error (the innermost error of the chain, numbers ignored, plus the host it names), largest
+/// group first. The outer context (which request, which record) becomes the group's variants,
+/// so one outage reads as one group. Reads the newest `limit` failing jobs.
+/// INVARIANT: the same root cause with different outer contexts is one group
+/// (test: one_root_cause_is_one_group_with_its_variants)
 pub async fn error_groups(db: &DatabaseConnection, limit: u64) -> Result<Vec<ErrorGroup>, DbErr> {
     let rows: Vec<(i64, String, JobState, Value)> = job::Entity::find()
         .select_only()
@@ -521,6 +643,7 @@ pub async fn error_groups(db: &DatabaseConnection, limit: u64) -> Result<Vec<Err
         .all(db)
         .await?;
     let mut groups: BTreeMap<(String, String), ErrorGroup> = BTreeMap::new();
+    let mut contexts: HashMap<(String, String), Vec<String>> = HashMap::new();
     for (id, worker, state, errors) in rows {
         let last = errors.as_array().and_then(|a| a.last());
         let message = last
@@ -532,20 +655,35 @@ pub async fn error_groups(db: &DatabaseConnection, limit: u64) -> Result<Vec<Err
             .and_then(Value::as_str)
             .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
             .map(|t| t.with_timezone(&Utc));
-        let signature = error_signature(message);
+        let (context, cause) = split_root_cause(message);
+        let root = error_signature(cause);
+        let host = error_host(message);
+        let key = format!("{root}\u{1f}{}", host.as_deref().unwrap_or_default());
+        let context = error_signature(context);
         let group = groups
-            .entry((worker.clone(), signature.clone()))
+            .entry((worker.clone(), key))
             .or_insert_with(|| ErrorGroup {
                 worker,
-                message: signature,
+                message: match &host {
+                    Some(h) => format!("{root} · {h}"),
+                    None => root.clone(),
+                },
+                root,
+                host,
+                variants: Vec::new(),
+                variant_count: 0,
                 count: 0,
                 retryable: 0,
                 discarded: 0,
                 first_seen: None,
                 last_seen: None,
                 example_id: id,
-                search: search_fragment(message),
+                search: search_fragment(cause),
             });
+        contexts
+            .entry((group.worker.clone(), group.message.clone()))
+            .or_default()
+            .push(context);
         group.count += 1;
         match state {
             JobState::Retryable => group.retryable += 1,
@@ -557,6 +695,29 @@ pub async fn error_groups(db: &DatabaseConnection, limit: u64) -> Result<Vec<Err
         }
     }
     let mut out: Vec<ErrorGroup> = groups.into_values().collect();
+    for group in &mut out {
+        let mut distinct: Vec<String> = Vec::new();
+        for c in contexts
+            .remove(&(group.worker.clone(), group.message.clone()))
+            .unwrap_or_default()
+        {
+            if !distinct.contains(&c) {
+                distinct.push(c);
+            }
+        }
+        group.variant_count = if distinct.len() > 1 {
+            distinct.len()
+        } else {
+            0
+        };
+        if group.variant_count > 0 {
+            let shown: Vec<String> = distinct.into_iter().take(MAX_VARIANTS).collect();
+            group.variants = distinct_parts(&shown)
+                .into_iter()
+                .map(|v| super::executor::truncate(&v, 60))
+                .collect();
+        }
+    }
     out.sort_by(|a, b| b.count.cmp(&a.count).then(b.last_seen.cmp(&a.last_seen)));
     Ok(out)
 }
@@ -1151,6 +1312,38 @@ mod tests {
             Some("connection refused (os error")
         );
         assert_eq!(search_fragment("42"), None);
+        assert_eq!(
+            search_fragment("HTTP 503 Service Unavailable").as_deref(),
+            Some("HTTP 503 Service Unavailable")
+        );
+        assert_eq!(
+            search_fragment("order 42 is locked").as_deref(),
+            Some("is locked")
+        );
+    }
+
+    #[test]
+    fn root_causes_hosts_and_variants() {
+        let msg = "POST https://hooks.partner.invalid/v2/events (order.paid): connecting to hooks.partner.invalid:443: connection refused (os error 61)";
+        let (context, cause) = split_root_cause(msg);
+        assert_eq!(cause, "connection refused (os error 61)");
+        assert!(context.ends_with("connecting to hooks.partner.invalid:443"));
+        assert_eq!(error_host(msg).as_deref(), Some("hooks.partner.invalid"));
+        assert_eq!(
+            error_host("connecting to db.internal.example:5432: timed out").as_deref(),
+            Some("db.internal.example")
+        );
+        assert_eq!(error_host("charging card 42: declined"), None);
+        assert_eq!(
+            split_root_cause("timed out after 30s"),
+            ("", "timed out after 30s")
+        );
+        let parts = distinct_parts(&[
+            "POST https://h.invalid/vN/events (order.paid): connecting".to_owned(),
+            "POST https://h.invalid/vN/events (order.refunded): connecting".to_owned(),
+            "POST https://h.invalid/vN/events (customer.updated): connecting".to_owned(),
+        ]);
+        assert_eq!(parts, ["order.paid", "order.refunded", "customer.updated"]);
     }
 
     #[test]

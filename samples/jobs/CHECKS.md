@@ -50,6 +50,7 @@ The queue has no HTTP surface of its own (the [jobs-dashboard](../jobs-dashboard
 | Every schedule entry enqueues a registered worker | `keys_are_unique_and_jobs_are_registered` |
 | Operator actions follow the state rules and keep the error history | `operator_actions_follow_the_state_rules`, `actions_parse_and_know_their_states` |
 | Stats, queues, throughput, latency percentiles, worker success rates and error groups are correct | `stats_queues_metrics_and_error_groups`, `percentiles_use_nearest_rank`, `error_signatures_group_by_shape` |
+| One root cause (innermost error + host, numbers ignored) is one error group, whatever the outer context; the contexts are its variants | `one_root_cause_is_one_group_with_its_variants`, `root_causes_hosts_and_variants` |
 | Listing pages by id and searches ids, args and errors | `listing_pages_by_id_and_searches_ids_and_errors` |
 | `APP_QUEUES` parses limits and rates and rejects anything else | `queue_specs_parse_limits_and_rates` |
 | The CLI prints tables and JSON, and its bulk commands need a filter and a yes | `stats_list_and_show_print_tables_and_json`, `bulk_commands_need_a_filter_and_a_confirmation`, `queues_cron_and_prune_commands` |

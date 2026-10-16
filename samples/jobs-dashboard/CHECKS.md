@@ -45,7 +45,7 @@ The dashboard can retry, cancel, discard and delete work, pause every queue, and
 | The list filters by state, queue, worker, tag, error and search, shows chips and pages by id | `the_job_list_filters_searches_and_pages` |
 | The job page shows args, meta, a timeline, each attempt's error and report, and only the actions its state allows | `the_job_page_shows_args_errors_per_attempt_and_timeline` |
 | A deleted job's page redirects to the list with a flash | `a_deleted_jobs_page_redirects_to_the_list_with_a_flash` |
-| Errors group by worker and shape, and their bulk retry goes through the confirmation | `the_errors_page_groups_failures_and_offers_a_bulk_retry` |
+| Errors group by worker and root cause (variants listed), and their bulk retry goes through the confirmation | `the_errors_page_groups_failures_and_offers_a_bulk_retry`, `one_root_cause_is_one_group_with_its_variants` |
 | The cron page shows next and last runs and runs an entry now | `the_cron_page_lists_next_runs_and_runs_an_entry_now` |
 | Queues pause and resume on every node; pause-all asks first and shows a banner | `queues_pause_and_resume_and_pause_all_asks_first` |
 | The demo task writes only synthetic URLs | `demo_urls_are_synthetic` |
