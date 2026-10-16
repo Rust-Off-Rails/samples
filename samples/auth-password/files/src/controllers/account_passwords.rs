@@ -137,6 +137,7 @@ pub async fn update(
     let raw = session::rotate(&txn, auth.session.id, now).await?;
     auth_event::record(&txn, Some(user.id), Kind::PasswordChanged, &meta.meta, now).await?;
     txn.commit().await?;
+    auth::sessions_ended(&s, user.id);
     auth::notify(&s, user.id, Notice::PasswordChanged);
     let notice = if has_password {
         "Password changed. Every other device was signed out."

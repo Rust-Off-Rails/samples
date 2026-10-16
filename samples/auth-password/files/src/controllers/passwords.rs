@@ -262,6 +262,7 @@ pub async fn update(
     auth_throttle::clear(&txn, &auth::throttle_key(&s, "login", &u.email)).await?;
     auth_event::record(&txn, Some(u.id), Kind::PasswordReset, &meta.meta, now).await?;
     txn.commit().await?;
+    auth::sessions_ended(&s, u.id);
     auth::notify(&s, u.id, Notice::PasswordChanged);
     let u = user::find_self(&s.db, u.id).await?;
     auth::sign_in(&s, &headers, &meta, u, "reset").await

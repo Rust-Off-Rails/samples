@@ -62,6 +62,7 @@ What "working and safe" means for the shared accounts layer, and the test that p
 | Background emails finish before `settle()` returns | `idle_waits_for_spawned_work` |
 | Emails are normalized (trimmed, lowercased) everywhere | `normalizes_and_validates` |
 | Auth pages use the app layout and follow the kernel theme switch (`data-theme` from the cookie) | `auth_pages_follow_the_theme_switch` |
+| Every handler that deletes session rows calls `auth::sessions_ended` after its commit (realtime wires its socket revocation there) | `every_session_ending_path_calls_sessions_ended` |
 
 ## Known limits (accepted, documented)
 

@@ -424,6 +424,7 @@ pub async fn create(
     session::revoke_others(&txn, &u, auth.session.id).await?;
     auth_event::record(&txn, Some(u.id), Kind::TwoFactorEnabled, &meta.meta, now).await?;
     txn.commit().await?;
+    auth::sessions_ended(&s, u.id);
     auth::notify(&s, u.id, Notice::TwoFactorEnabled);
     let page = RecoveryCodes::new(
         ctx.titled("Save your recovery codes").noindex(),

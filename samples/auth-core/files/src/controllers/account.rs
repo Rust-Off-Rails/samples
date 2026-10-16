@@ -101,6 +101,7 @@ pub async fn revoke(
         Utc::now(),
     )
     .await?;
+    auth::sessions_ended(&s, current.user.id);
     Ok((
         Flash::notice("That device was signed out."),
         Redirect::to(&paths::account()),
@@ -123,6 +124,7 @@ pub async fn revoke_others(
         Utc::now(),
     )
     .await?;
+    auth::sessions_ended(&s, current.user.id);
     let message = match n {
         0 => "There were no other devices to sign out.".to_owned(),
         1 => "Signed out 1 other device.".to_owned(),

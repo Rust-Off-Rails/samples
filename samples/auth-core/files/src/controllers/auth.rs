@@ -297,6 +297,8 @@ pub async fn finish_sign_in(
 
     let txn = db::begin(&state.db).await?;
     if let Some(old) = auth_cookie::read_session(headers, secure) {
+        // WHY: no sessions_ended here: the replaced session's owner isn't loaded, and anything
+        // still holding it closes at its next session re-check.
         session::destroy_by_token(&txn, &old).await?;
     }
     let new_device = auth_event::ever_signed_in(&txn, user.id).await?
@@ -420,6 +422,17 @@ pub async fn revoke_other_access(
     session::revoke_others(txn, user, keep_session_id).await?;
     // samples: revoke other access
     Ok(())
+}
+
+/// Sessions of `user_id` ended: call it after the commit, wherever that happens (sign-out, a
+/// revoked device, "sign out everywhere else", password change and reset, "this wasn't me",
+/// turning two-factor on). Whatever keeps a live connection for that person re-checks its session
+/// here: the realtime sample wires `channels::session_ended` in, so open sockets close at once.
+// INVARIANT: every place that deletes session rows calls this after its commit
+// (test: every_session_ending_path_calls_sessions_ended)
+pub fn sessions_ended(state: &AppState, user_id: i64) {
+    let _ = (state, user_id);
+    // samples: sessions ended
 }
 
 /// The `auth_throttles` key for guesses at `subject` in `scope` ("login", "reauth", "totp"):

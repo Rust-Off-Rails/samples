@@ -83,6 +83,7 @@ pub async fn create(
     auth::revoke_everything(&txn, u.id).await?;
     auth_event::record(&txn, Some(u.id), Kind::NotMe, &meta.meta, now).await?;
     txn.commit().await?;
+    auth::sessions_ended(&s, u.id);
     // APP: what to suggest next. With passwords, a reset; with magic links, signing in again.
     let mut response = (
         Flash::notice(

@@ -1028,7 +1028,8 @@ impl LogCapture {
         let file = tempfile::NamedTempFile::new().expect("temp file");
         let sink = file.reopen().expect("reopen");
         let subscriber = tracing_subscriber::fmt()
-            .with_env_filter(tracing_subscriber::EnvFilter::new(
+            // The app's own filter (main.rs), at trace: what a RUST_LOG=trace run would write.
+            .with_env_filter(offrails_host::kernel::redact::log_filter(
                 "trace,hyper=info,h2=info",
             ))
             .with_ansi(false)
@@ -1102,4 +1103,42 @@ async fn auth_pages_follow_the_theme_switch() {
     let user = factories::user(app.db(), "ada@example.com").await;
     app.sign_in_as(&user).await;
     assert_pages_follow_the_theme(&app, &["/account", "/account/email/edit"]).await;
+}
+
+/// Every handler that deletes session rows tells `auth::sessions_ended` after its commit, so
+/// realtime (when installed) closes that person's sockets at once. Checked on the source: one
+/// function at a time, across every controller in the app (other auth samples' too).
+#[test]
+fn every_session_ending_path_calls_sessions_ended() {
+    const ENDS: &[&str] = &[
+        "session::revoke_for(",
+        "session::revoke_others(",
+        "session::revoke_all(",
+        "auth::revoke_everything(",
+        "auth::revoke_other_access(",
+        "session::destroy_by_token(&s.db",
+    ];
+    // The helpers themselves run inside a caller's transaction; the caller reports.
+    const HELPERS: &[&str] = &["revoke_everything(", "revoke_other_access("];
+    let mut checked = 0;
+    for entry in std::fs::read_dir("src/controllers").unwrap() {
+        let path = entry.unwrap().path();
+        let src = std::fs::read_to_string(&path).unwrap();
+        for f in src
+            .split("\nasync fn ")
+            .flat_map(|c| c.split("\npub async fn "))
+        {
+            if !ENDS.iter().any(|e| f.contains(e)) || HELPERS.iter().any(|h| f.starts_with(h)) {
+                continue;
+            }
+            checked += 1;
+            let name = f.split('(').next().unwrap_or_default();
+            assert!(
+                f.contains("sessions_ended(&s,"),
+                "{}: {name} ends sessions without auth::sessions_ended",
+                path.display()
+            );
+        }
+    }
+    assert!(checked >= 4, "found only {checked} session-ending handlers");
 }

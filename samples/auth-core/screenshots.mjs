@@ -10,7 +10,8 @@
 //
 // Every address is on example.com; the only TOTP secret shown is the fixed, fake demo key
 // (AAAA…); fresh accounts get random secrets that exist only in the throwaway demo database.
-// `authScreens` has the same shape as tools/screenshots/shoot.mjs's `screens`.
+// `authScreens` has the same shape as tools/screenshots/shoot.mjs's `screens`, which imports it:
+// tools/screenshots.sh shoots these with every other installed sample (and runs axe with AXE=1).
 import { createHmac } from "node:crypto";
 import { mkdirSync } from "node:fs";
 

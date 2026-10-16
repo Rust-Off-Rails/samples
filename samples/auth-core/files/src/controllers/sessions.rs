@@ -56,6 +56,7 @@ pub async fn destroy(
         Utc::now(),
     )
     .await?;
+    crate::controllers::auth::sessions_ended(&s, current.user.id);
     let mut response = (Flash::notice("Signed out."), Redirect::to(&paths::root())).into_response();
     response
         .headers_mut()
