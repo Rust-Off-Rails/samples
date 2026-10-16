@@ -6,7 +6,8 @@
 #   tools/demo.sh status                        is it running, and where
 #
 # demo/ is git-ignored. The server's PID is in demo/demo.pid; it is stopped by that PID only.
-# Every detail it shows is synthetic: example.com addresses, a localhost URL.
+# Every detail it shows is synthetic: example.com addresses, a localhost URL. With auth-core, the
+# demo accounts' fake credentials (app task auth_demo) are printed and kept in demo/credentials.txt.
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -29,10 +30,15 @@ case "${1:-}" in
     exit 0
     ;;
   status)
-    if running; then echo "running: PID $(cat "$pidfile"), $(cat "$demo/demo.url" 2>/dev/null)"; else echo "not running"; fi
+    if running; then
+      echo "running: PID $(cat "$pidfile"), $(cat "$demo/demo.url" 2>/dev/null)"
+      if [ -s "$demo/credentials.txt" ]; then cat "$demo/credentials.txt"; fi
+    else
+      echo "not running"
+    fi
     exit 0
     ;;
-  -h | --help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h | --help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 esac
 
 while [ $# -gt 0 ]; do
@@ -92,6 +98,11 @@ fi
 if grep -q "installed sample jobs-dashboard " docs/decisions.md; then
   "$demo/app-bin" task jobs_demo >/dev/null
 fi
+# Demo accounts: fake, documented credentials (samples/auth-core, src/tasks/auth_demo.rs).
+rm -f "$demo/credentials.txt"
+if grep -q "installed sample auth-core " docs/decisions.md; then
+  "$demo/app-bin" task auth_demo > "$demo/credentials.txt"
+fi
 
 nohup "$demo/app-bin" serve > "$demo/demo.log" 2>&1 &
 echo $! > "$pidfile"
@@ -107,3 +118,4 @@ until curl -fsS "$url/up" >/dev/null 2>&1; do
   sleep 1
 done
 echo "demo running: $url (PID $(cat "$pidfile")); stop with tools/demo.sh stop"
+if [ -s "$demo/credentials.txt" ]; then cat "$demo/credentials.txt"; fi
