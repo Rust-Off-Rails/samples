@@ -2,6 +2,19 @@
 @source "../templates";
 @source "../static/app.js";
 
+/* Theme: `<html data-theme="system|light|dark">` comes from the `offrails_theme` cookie
+   (src/kernel/theme.rs; the switch lives in the kernel header). One `dark:` variant covers the
+   choice and, for "system", the OS. GUIDE: .offrails/guides/views.md#dark-mode */
+@custom-variant dark {
+  &:where([data-theme=dark], [data-theme=dark] *) { @slot; }
+  @media (prefers-color-scheme: dark) {
+    &:where(:root:not([data-theme=light]), :root:not([data-theme=light]) *) { @slot; }
+  }
+}
+:root { color-scheme: light dark; }
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+
 /* htmx's own indicator styles, because includeIndicatorStyles is off (CSP) */
 .htmx-indicator { opacity: 0; }
 .htmx-request .htmx-indicator, .htmx-request.htmx-indicator { opacity: 1; transition: opacity 200ms ease-in; }

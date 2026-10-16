@@ -9,7 +9,7 @@ A live operations dashboard for the [jobs](../jobs/) queue at **`/admin/jobs`**,
 - **Cron.** Every `SCHEDULE` entry with its expression in words, the next run (relative and UTC), the last run (linked to the job it enqueued), and **Run now**.
 - **Pause all** for deploys and migrations, with a banner while everything is paused.
 - **Keyboard**: `g o`/`g j`/`g e`/`g c` sections, `/` search, `j`/`k` move through jobs, `x` select, `Enter` open, `l` live on/off, `?` the list.
-- **Looks right everywhere**: light and dark, WCAG 2.2 AA (axe-clean in both on every screen, desktop and mobile), usable at 320 px (the job list turns into cards), motion off under `prefers-reduced-motion`.
+- **Looks right everywhere**: light and dark, following the kernel header's System / Light / Dark switch ([theming](../FORMAT.md#theming)), WCAG 2.2 AA (axe-clean in both on every screen, desktop and mobile), usable at 320 px (the job list turns into cards), motion off under `prefers-reduced-motion`.
 - **Safe**: admin-only (open only in development), every change a CSRF-checked POST, confirmations for anything bulk or destructive, nothing changes on GET, redirects only within the dashboard, `no-store` on every response, everything escaped, secret-looking args redacted.
 
 Extracted from Rust off Rails apps and rebuilt from the best of two of them. Kept: the state cards, the stacked chart with its legend, running/paused/no-nodes pills with Pause buttons, keyset paging and the confirmation page for bulk actions. Fixed: a chart built as an HTML string and rendered with `|safe` (now an SVG template of numbers, no `|safe` anywhere), dashboard CSS living in a shared stylesheet that pages forgot to link (now its own file, linked by the page, with a test that every template class has a rule), destructive single-job actions without confirmation, and a cron page that found its last job by string-matching JSON. Added: queue-wait percentiles, the now-running lane with progress, worker success rates, error groups, discard and pause-all, the timeline, per-attempt reports, filter chips, keyboard navigation, copyable CLI commands, the mobile card layout and the password gate's rate limit.
@@ -47,7 +47,7 @@ Through the samples MCP server: `get_sample jobs-dashboard`. Or by hand, in the 
    - `src/controllers/dev.rs`: the Jobs tile. `templates/layouts/application.html`: a development footer link `<a href="/admin/jobs" hx-boost="false" class="link">Jobs</a>`.
    - `src/tasks/mod.rs`: `pub mod jobs_demo;` and `"jobs_demo" => jobs_demo::run(state, args).await,`.
    - `.env.example` and `compose.yaml`: `APP_ADMIN_PASSWORD`.
-   - `tests/app/main.rs`: `mod jobs_dashboard_test;` · `tests/app/security_test.rs`: `"src/kernel/jobs_web/mod.rs"` in the route sources · `tests/app/kernel_web_test.rs`: the four page paths in the no-store list.
+   - `tests/app/main.rs`: `mod jobs_dashboard_test;` · `tests/app/security_test.rs`: `"src/kernel/jobs_web/mod.rs"` in the route sources · `tests/app/kernel_web_test.rs`: the four page paths in the no-store list · `tests/app/theme_switch_test.rs`: the same four in `KERNEL_PAGES`.
 4. `cargo fmt --all && cargo run -- routes`, then the Definition of Done.
 
 `tools/install.sh jobs-dashboard <app>` installs jobs first if needed, then does steps 1 to 3.
@@ -62,7 +62,7 @@ Through the samples MCP server: `get_sample jobs-dashboard`. Or by hand, in the 
 
 - **Put it behind your own admin accounts** (with an auth sample installed). In `src/controllers/admin_access.rs` (`// APP:`), make `admin_from_session` ask the app's current-user extractor and return `Some(user.is_admin())` (or `None` when nobody is signed in), and set `HAS_ACCOUNTS = true`. Signed-in non-admins get a 404, anonymous visitors the login page. Add a test like `the_admin_password_gates_every_dashboard_route` that signs in a member and an admin. Keep `APP_ADMIN_PASSWORD` unset, or keep it as a break-glass login.
 - **A password instead (no accounts).** Set `APP_ADMIN_PASSWORD` (16+ characters) in production: HTTP Basic, compared in constant time, 10 failed tries per 3 minutes per client IP. Behind a proxy, set `APP_TRUSTED_PROXY=true` so the limit counts real client IPs.
-- **Brand it.** The state and chart tones are tokens at the top of `static/kernel/jobs.css` (`/* APP: */`); the shared chrome is `static/kernel/admin.css`.
+- **Brand it.** The state and chart tones are tokens at the top of `static/kernel/jobs.css` (`/* APP: */`), each `light-dark(<light>, <dark>)`; the shared chrome is `static/kernel/admin.css`. Keep AA contrast in both and never add a `prefers-color-scheme` block (it ignores the theme switch). JS that reads a color (a canvas chart) re-reads it on `document`'s `themechange` event; today's charts are SVG styled by CSS, so they need nothing.
 - **Change refresh rates or windows.** The `hx-trigger="every …"` attributes in `templates/kernel/jobs/_*.html`; `PAGE_SIZE`, `CHART_MINUTES` and `ERROR_SCAN` in `src/kernel/jobs_web/mod.rs`.
 - **Show more of a job.** Add a field to `JobView` in `views.rs` and a row to `show.html`. Args and meta must keep going through `redact`.
 

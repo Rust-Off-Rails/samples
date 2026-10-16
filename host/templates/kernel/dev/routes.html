@@ -6,7 +6,7 @@
   <button class="btn">Filter</button>
   {% if !q.is_empty() %}<a class="btn quiet" href="/dev/routes">Clear</a>{% endif %}
 </form>
-<div class="scroll">
+<div class="scroll" tabindex="0" role="region" aria-label="Routes table">
 <table>
   <thead><tr><th scope="col">Method</th><th scope="col">Path</th><th scope="col">Handler</th><th scope="col">Access</th></tr></thead>
   <tbody>

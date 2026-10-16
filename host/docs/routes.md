@@ -9,6 +9,7 @@
 | GET | `/robots.txt` | `meta::robots` | public |
 | GET | `/sitemap.xml` | `meta::sitemap` | public |
 | GET | `/favicon.ico` | `static favicon` | public |
+| POST | `/theme` | `theme::update` | public |
 | GET | `/dev` | `dev::index` | dev |
 | GET | `/dev/routes` | `dev::routes` | dev |
 | GET | `/dev/system` | `dev::system` | dev |

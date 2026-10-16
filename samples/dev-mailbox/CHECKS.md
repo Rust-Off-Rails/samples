@@ -31,6 +31,7 @@ The mailbox renders mail that the app (and, through it, anyone who can type into
 | A deleted message's URL redirects to the inbox with a flash, never a bare 404 | `delete_clear_and_gone_messages_redirect_with_a_flash` |
 | The live inbox hears about new mail from any process, and a reconnect resumes from the last event id | `the_inbox_is_live_over_server_sent_events`, `a_reconnect_resumes_from_the_last_event_id`, `the_list_fragment_reports_the_counts_for_the_live_inbox` |
 | The preview renders in the chosen scheme, whatever the developer's OS theme | `previews_render_in_the_chosen_scheme_whatever_the_os_says` |
+| The mailbox follows the kernel header's theme switch (`data-theme`, `light-dark()` tokens); the email's Dark view stays the email's, whatever the tool's theme | `the_mailbox_follows_the_theme_switch_and_the_dark_preview_stays_the_emails`, `every_kernel_page_renders_data_theme` |
 | The `.eml` download is the exact stored message | `the_eml_download_is_the_exact_message` |
 | Previews render in the same viewer and are never stored | `previews_render_in_the_same_viewer_and_are_never_stored` |
 | Agents get links and codes as JSON, filterable by recipient, subject and cursor | `the_json_endpoints_filter_and_carry_links_and_codes` |
@@ -39,7 +40,7 @@ The mailbox renders mail that the app (and, through it, anyone who can type into
 
 ## In a browser (not part of the test suite)
 
-- axe-core (WCAG 2.2 AA), light and dark, on the inbox, a message in every tab and view, previews, search and the dev pages: 0 violations.
+- axe-core (WCAG 2.2 AA), light and dark (the OS scheme and the switch forcing each), on the inbox, a message in every tab and view, previews, search and the dev pages: 0 violations.
 - Keyboard: every action is a link, button or form; `j`/`k`/`/`/`c`/`o`/`e`/`d`/`1`–`4`/`?` are shortcuts on top, never the only way.
 - No console errors and no CSP violations on any mailbox page.
 

@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="{{ ctx.theme.as_str() }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light dark">
+  <meta name="color-scheme" content="{{ ctx.theme.color_scheme() }}">
   <meta name="htmx-config" content='{"allowEval":false,"includeIndicatorStyles":false,"historyCacheSize":0,"refreshOnHistoryMiss":true,"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"422","swap":true},{"code":"429","swap":true},{"code":"[45]..","swap":false,"error":true}]}'>
   <title>{{ ctx.page_title() }}</title>
   <meta name="description" content="{{ ctx.description }}">

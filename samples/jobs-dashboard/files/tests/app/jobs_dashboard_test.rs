@@ -791,6 +791,38 @@ async fn every_dashboard_response_is_no_store() {
 
 /// The page links its own stylesheet and script, both are served, and every class the
 /// templates use has a rule (a dashboard whose CSS never loads is a known failure elsewhere).
+/// The dashboard follows the kernel header's theme switch on every page, the confirmation page
+/// included (its no-JS switch returns to where Cancel goes, never to the POST URL).
+#[tokio::test]
+async fn the_dashboard_follows_the_theme_switch() {
+    let app = TestApp::with_config(development()).await;
+    let (id, _, _) = seed(app.db()).await;
+    app.set_cookie("offrails_theme", "dark");
+    for path in [
+        "/admin/jobs".to_owned(),
+        "/admin/jobs/list".to_owned(),
+        "/admin/jobs/errors".to_owned(),
+        "/admin/jobs/cron".to_owned(),
+        format!("/admin/jobs/{id}"),
+    ] {
+        app.get(&path)
+            .await
+            .assert_ok()
+            .assert_contains(r#"<html lang="en" data-theme="dark">"#);
+    }
+    app.post_form(&format!("/admin/jobs/{id}/delete"), &[])
+        .await
+        .assert_ok()
+        .assert_contains(r#"<html lang="en" data-theme="dark">"#)
+        .assert_contains(&format!(r#"name="return_to" value="/admin/jobs/{id}""#));
+    let css = std::fs::read_to_string("static/kernel/jobs.css").unwrap();
+    assert!(
+        !css.contains("@media (prefers-color-scheme"),
+        "a color-scheme media query ignores the switch: use light-dark() tokens"
+    );
+    assert!(css.contains("--chart-ok: light-dark("));
+}
+
 #[tokio::test]
 async fn the_dashboard_loads_its_own_css_and_js() {
     let app = TestApp::with_config(development()).await;

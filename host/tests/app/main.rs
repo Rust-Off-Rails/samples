@@ -8,5 +8,6 @@ mod kernel_test;
 mod kernel_web_test;
 mod security_test;
 mod smoke_test;
+mod theme_switch_test;
 mod theme_test;
 // samples: test mods

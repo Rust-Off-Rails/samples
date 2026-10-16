@@ -39,6 +39,7 @@ The dashboard can retry, cancel, discard and delete work, pause every queue, and
 | Invariant | Test |
 |-----------|------|
 | The dashboard links its own stylesheet and script, and both are served (the CSS-never-loads bug) | `the_dashboard_loads_its_own_css_and_js` |
+| Every page, the confirmation included, follows the kernel header's theme switch (`data-theme`, `light-dark()` tokens) | `the_dashboard_follows_the_theme_switch`, `every_kernel_page_renders_data_theme` |
 | Every class a dashboard template uses has a rule in `admin.css` or `jobs.css` | `every_dashboard_class_has_a_css_rule` |
 | The overview shows counters, both charts, the running lane, queues with their status pills, worker success rates and nodes, with empty states; `live=0` renders no polling | `the_overview_shows_counts_charts_queues_workers_and_nodes` |
 | Every live fragment renders alone; an unknown part is a 404 | `every_fragment_renders_alone` |
@@ -54,7 +55,7 @@ The dashboard can retry, cancel, discard and delete work, pause every queue, and
 
 Run with the demo data (`app task jobs_demo`, or `tools/demo.sh jobs-dashboard`), then:
 
-- axe (WCAG 2.0/2.1/2.2 A and AA) on every screen, light and dark, desktop (1440×900) and mobile (390×844): 0 violations; no console errors or CSP violations; no horizontal scroll on mobile.
+- axe (WCAG 2.0/2.1/2.2 A and AA) on every screen, light and dark (the OS scheme and the switch forcing each), desktop (1440×900) and mobile (390×844): 0 violations; no console errors or CSP violations; no horizontal scroll on mobile.
 - Keyboard only: Tab reaches every control with a visible focus ring; `?` opens the shortcuts dialog and Escape closes it; `j`/`k`/`x`/`Enter` work on the list.
 - `prefers-reduced-motion: reduce`: the live dot, the executing badge and indeterminate progress bars stand still.
 

@@ -15,6 +15,7 @@ use sea_orm::{ConnAcquireErr, DbErr};
 
 use crate::{
     config::AppEnv,
+    kernel::theme::Theme,
     models::Errors,
     routes::paths,
     state::AppState,
@@ -135,6 +136,7 @@ pub fn panic_response(payload: Box<dyn std::any::Any + Send>) -> Response {
 pub async fn shape_errors(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
     let flavor = classify(&req);
     req.extensions_mut().insert(flavor);
+    let theme = Theme::from_headers(req.headers());
 
     let mut response = next.run(req).await;
     // A handler's own 422 re-render (a form with errors) ends here too.
@@ -156,14 +158,13 @@ pub async fn shape_errors(State(state): State<AppState>, mut req: Request, next:
     let rendered = match report.status {
         StatusCode::UNAUTHORIZED => return unauthorized(flavor),
         StatusCode::NOT_FOUND => {
-            render(views::errors::NotFound).map(|h| (StatusCode::NOT_FOUND, h))
+            render(views::errors::NotFound { theme }).map(|h| (StatusCode::NOT_FOUND, h))
         }
         StatusCode::FORBIDDEN => {
-            render(views::errors::Forbidden).map(|h| (StatusCode::FORBIDDEN, h))
+            render(views::errors::Forbidden { theme }).map(|h| (StatusCode::FORBIDDEN, h))
         }
-        StatusCode::TOO_MANY_REQUESTS => {
-            render(views::errors::TooManyRequests).map(|h| (StatusCode::TOO_MANY_REQUESTS, h))
-        }
+        StatusCode::TOO_MANY_REQUESTS => render(views::errors::TooManyRequests { theme })
+            .map(|h| (StatusCode::TOO_MANY_REQUESTS, h)),
         StatusCode::UNPROCESSABLE_ENTITY => render(views::errors::Invalid {
             messages: report
                 .errors
@@ -172,10 +173,10 @@ pub async fn shape_errors(State(state): State<AppState>, mut req: Request, next:
                 .unwrap_or_default(),
         })
         .map(|h| (StatusCode::UNPROCESSABLE_ENTITY, h)),
-        StatusCode::SERVICE_UNAVAILABLE => {
-            render(views::errors::Unavailable).map(|h| (StatusCode::SERVICE_UNAVAILABLE, h))
-        }
+        StatusCode::SERVICE_UNAVAILABLE => render(views::errors::Unavailable { theme })
+            .map(|h| (StatusCode::SERVICE_UNAVAILABLE, h)),
         _ => render(views::errors::ServerError {
+            theme,
             detail: report.detail.filter(|_| development),
         })
         .map(|h| (StatusCode::INTERNAL_SERVER_ERROR, h)),

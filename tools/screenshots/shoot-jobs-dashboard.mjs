@@ -30,6 +30,8 @@ const screens = [
     await page.waitForLoadState("networkidle");
   }],
   ["shortcuts", async () => "/admin/jobs/list", async (page) => { await page.keyboard.press("?"); }],
+  // The header's theme switch beats the OS: Dark chosen while the system is Light.
+  ["forced-dark", async () => "/admin/jobs", null, { cookie: "dark", themes: ["light"] }],
 ];
 
 const viewports = {
@@ -42,15 +44,16 @@ let count = 0;
 let violations = 0;
 try {
   mkdirSync(OUT, { recursive: true });
-  for (const [screen, resolve, act] of screens) {
+  for (const [screen, resolve, act, opt = {}] of screens) {
     if (only.length && !only.includes(screen)) continue;
-    for (const theme of ["light", "dark"]) {
+    for (const theme of opt.themes ?? ["light", "dark"]) {
       for (const [vp, opts] of Object.entries(viewports)) {
         const context = await browser.newContext({
           viewport: { width: opts.width, height: opts.height },
           deviceScaleFactor: opts.deviceScaleFactor, isMobile: opts.isMobile, hasTouch: opts.hasTouch ?? false,
           colorScheme: theme, reducedMotion: "reduce",
         });
+        if (opt.cookie) await context.addCookies([{ name: "offrails_theme", value: opt.cookie, url: BASE }]);
         const page = await context.newPage();
         const errors = [];
         page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });

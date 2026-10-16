@@ -5,32 +5,26 @@
    WHY: an app once moved these rules into app.css; the kernel layout never loads it, so the
    mailbox rendered unstyled. The test `every_mailbox_page_links_its_own_stylesheet_and_script`
    and `every_mailbox_class_has_a_rule` keep it from happening again.
-   Plain CSS, no inline styles (the CSP is style-src 'self'), light and dark, usable at 320px. */
+   Plain CSS, no inline styles (the CSP is style-src 'self'), usable at 320px.
+   Theme: tokens defined once with `light-dark(<light>, <dark>)`; admin.css sets `color-scheme` from
+   the kernel header's switch (`<html data-theme>`), so the mailbox follows it. No color-scheme
+   media queries: they would ignore the switch. Every pair meets WCAG 2.2 AA in both themes.
+   APP: change the tones below to match your brand. */
 
 :root {
-  --mbx-unread: #4338ca;
-  --mbx-select: #eef2ff;
-  --mbx-select-edge: #4338ca;
-  --mbx-code-bg: #f5f3ff;
-  --mbx-stage: #e7e5e4;
-  --mbx-error: #b91c1c;
-  --mbx-warn: #a16207;
-  --mbx-info: #0369a1;
+  --mbx-unread: light-dark(#4338ca, #a5b4fc);
+  --mbx-select: light-dark(#eef2ff, #312e81);
+  --mbx-select-edge: light-dark(#4338ca, #a5b4fc);
+  --mbx-code-bg: light-dark(#f5f3ff, #2e1065);
+  --mbx-stage: light-dark(#e7e5e4, #0c0a09);
+  --mbx-error: light-dark(#b91c1c, #fca5a5);
+  --mbx-warn: light-dark(#a16207, #fcd34d);
+  --mbx-info: light-dark(#0369a1, #7dd3fc);
   --mbx-radius: 10px;
-  --mbx-shadow: 0 1px 2px rgb(0 0 0 / .06), 0 4px 16px rgb(0 0 0 / .06);
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --mbx-unread: #a5b4fc;
-    --mbx-select: #312e81;
-    --mbx-select-edge: #a5b4fc;
-    --mbx-code-bg: #2e1065;
-    --mbx-stage: #0c0a09;
-    --mbx-error: #fca5a5;
-    --mbx-warn: #fcd34d;
-    --mbx-info: #7dd3fc;
-    --mbx-shadow: 0 1px 2px rgb(0 0 0 / .4), 0 4px 16px rgb(0 0 0 / .3);
-  }
+  --mbx-shadow: 0 1px 2px light-dark(rgb(0 0 0 / .06), rgb(0 0 0 / .4)), 0 4px 16px light-dark(rgb(0 0 0 / .06), rgb(0 0 0 / .3));
+  /* WHY: fixed, not light-dark(): the frame element pins its own color-scheme (below), which
+     would resolve a light-dark() shadow by the email's scheme instead of the tool's. */
+  --mbx-frame-shadow: 0 1px 2px rgb(0 0 0 / .15), 0 4px 16px rgb(0 0 0 / .15);
 }
 
 /* The mailbox fills the window under the kernel header; each pane scrolls on its own. */
@@ -131,15 +125,17 @@ kbd { display: inline-block; min-width: 1.3em; padding: 0 .3em; border: 1px soli
 .mbx-seg a:hover { color: var(--fg); }
 .mbx-seg a[aria-current="page"] { background: var(--accent-bg); color: var(--accent); font-weight: 600; }
 
-/* The HTML body: a stage that shows the chosen width, the frame inside it. */
+/* The HTML body: a stage that shows the chosen width, the frame inside it. The stage is the
+   tool's chrome and follows the tool's theme; what's inside the frame is the EMAIL, and its
+   Desktop / Mobile / Dark views are about how mail clients show it, whatever the tool's theme. */
 .mbx-stage { padding: 1.25rem; border-radius: var(--mbx-radius); background: var(--mbx-stage); }
 /* The light/dark rendering of the mail itself is done by the server (mailbox_web::in_scheme): a
    sandboxed frame is cross-origin and follows the OS theme, whatever its color-scheme says. */
-.mbx-frame { display: block; width: 100%; height: 70vh; min-height: 420px; margin: 0 auto; border: 0; border-radius: 8px; background: #fff; box-shadow: var(--mbx-shadow); color-scheme: light; }
+.mbx-frame { display: block; width: 100%; height: 70vh; min-height: 420px; margin: 0 auto; border: 0; border-radius: 8px; background: #fff; box-shadow: var(--mbx-frame-shadow); color-scheme: light; }
 .mbx-stage-600 .mbx-frame { width: 600px; max-width: 100%; }
 .mbx-stage-320 .mbx-frame { width: 320px; max-width: 100%; border: 8px solid #1c1917; border-radius: 28px; }
-/* Dark view: the mail's own dark-mode CSS, or the full inversion many mail apps apply. */
-.mbx-stage-dark { background: #0c0a09; }
+/* Dark view: the mail's own dark-mode CSS, or the full inversion many mail apps apply. Only the
+   frame changes; the stage around it stays the tool's. */
 .mbx-stage-dark .mbx-frame { color-scheme: dark; background: #111; }
 
 .mbx-pre-wrap { position: relative; }

@@ -9,6 +9,7 @@ pub mod flash;
 pub mod introspect;
 pub mod rate_limit;
 pub mod security;
+pub mod theme;
 pub mod tls;
 pub mod ui;
 // samples: kernel mods

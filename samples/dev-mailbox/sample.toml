@@ -158,3 +158,11 @@ text = '''
 "/dev/mailbox/previews",
 "/dev/mailbox.json",
 '''
+
+[[wire]]
+file = "tests/app/theme_switch_test.rs"
+anchor = "kernel pages"
+text = '''
+"/dev/mailbox",
+"/dev/mailbox/previews",
+'''

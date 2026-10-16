@@ -86,6 +86,33 @@ async fn every_mailbox_page_links_its_own_stylesheet_and_script() {
     app.get("/static/kernel/mailbox.js").await.assert_ok();
 }
 
+/// The tool follows the kernel header's theme switch; the email's own Dark view doesn't: it
+/// stays a property of the preview, whatever the tool's theme.
+#[tokio::test]
+async fn the_mailbox_follows_the_theme_switch_and_the_dark_preview_stays_the_emails() {
+    let app = dev_app().await;
+    let id = deliver(&app, welcome("ada@example.com")).await;
+    app.set_cookie("offrails_theme", "light");
+    app.get(&format!("/dev/mailbox/{id}?view=dark"))
+        .await
+        .assert_ok()
+        .assert_contains(r#"<html lang="en" data-theme="light">"#)
+        .assert_contains("mbx-stage mbx-stage-dark")
+        .assert_contains("/html?scheme=dark");
+    app.set_cookie("offrails_theme", "dark");
+    app.get(&format!("/dev/mailbox/{id}"))
+        .await
+        .assert_contains(r#"<html lang="en" data-theme="dark">"#)
+        .assert_contains("mbx-stage mbx-stage-desktop")
+        .assert_contains("/html?scheme=light");
+    let css = std::fs::read_to_string("static/kernel/mailbox.css").unwrap();
+    assert!(
+        !css.contains("@media (prefers-color-scheme"),
+        "a color-scheme media query ignores the switch: use light-dark() tokens"
+    );
+    assert!(css.contains("--mbx-stage: light-dark("));
+}
+
 /// Every class a mailbox template uses has a rule in the stylesheets the page loads.
 #[test]
 fn every_mailbox_class_has_a_rule() {

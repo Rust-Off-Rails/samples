@@ -13,6 +13,7 @@ use crate::config::Config;
 use crate::controllers::migrations;
 use crate::error::AppError;
 use crate::kernel::flash::RequestFlash;
+use crate::kernel::theme::ThemeSwitch;
 use crate::kernel::ui::{self, BOOTED_AT, Chrome};
 use crate::routes::ROUTES;
 use crate::state::AppState;
@@ -37,6 +38,7 @@ fn chrome(
     tab: &str,
     title: &str,
     flash: Option<Extension<RequestFlash>>,
+    theme: ThemeSwitch,
 ) -> Chrome {
     Chrome::new(
         title,
@@ -44,6 +46,7 @@ fn chrome(
         state.assets.assets(),
         true,
         flash.and_then(|f| f.0.0),
+        theme,
     )
 }
 
@@ -73,6 +76,7 @@ struct DevIndex {
 async fn index(
     State(state): State<AppState>,
     flash: Option<Extension<RequestFlash>>,
+    theme: ThemeSwitch,
 ) -> Result<Response, AppError> {
     let pending = migrations::pending(&state.db).await?.len();
     let tiles = vec![
@@ -98,7 +102,7 @@ async fn index(
         // samples: dev try-it
     ];
     Ok(ui::page(DevIndex {
-        chrome: chrome(&state, "dev", "Dev tools", flash),
+        chrome: chrome(&state, "dev", "Dev tools", flash, theme),
         tiles,
         try_it,
         base: state.config.app_url.clone(),
@@ -131,6 +135,7 @@ async fn routes_page(
     State(state): State<AppState>,
     Query(query): Query<RoutesQuery>,
     flash: Option<Extension<RequestFlash>>,
+    theme: ThemeSwitch,
 ) -> Response {
     let q = query.q.unwrap_or_default().trim().to_lowercase();
     let rows: Vec<RouteRow> = ROUTES
@@ -149,7 +154,7 @@ async fn routes_page(
         })
         .collect();
     ui::page(DevRoutes {
-        chrome: chrome(&state, "routes", "Routes", flash),
+        chrome: chrome(&state, "routes", "Routes", flash, theme),
         shown: rows.len(),
         total: ROUTES.len(),
         rows,
@@ -169,9 +174,10 @@ struct DevSystem {
 async fn system(
     State(state): State<AppState>,
     flash: Option<Extension<RequestFlash>>,
+    theme: ThemeSwitch,
 ) -> Result<Response, AppError> {
     Ok(ui::page(DevSystem {
-        chrome: chrome(&state, "system", "System", flash),
+        chrome: chrome(&state, "system", "System", flash, theme),
         facts: describe_config(&state.config),
         applied: migrations::applied(&state.db).await?,
         pending: migrations::pending(&state.db).await?,
