@@ -20,8 +20,13 @@ async fn a_join_answers_ok_with_the_cursor_then_presence_here_including_the_join
     assert_eq!(joined.data["seq"], 0);
     assert!(!joined.gap && joined.replay.is_empty());
     let here = ws.presence("room:lobby").await;
-    assert_eq!(here["here"][ann.key()]["name"], "Ann Example");
-    assert_eq!(here["here"][ann.key()]["initials"], "AE");
+    assert_eq!(here["here"][ann.key()]["name"], ann.name.as_str());
+    // "AE" for the guest "Ann Example"; an account's initials come from its own display name.
+    assert_eq!(
+        here["here"][ann.key()]["initials"],
+        offrails_host::models::guest::initials(&ann.name)
+    );
+    assert_eq!(offrails_host::models::guest::initials("Ann Example"), "AE");
 }
 
 #[tokio::test]
@@ -70,7 +75,7 @@ async fn a_message_reaches_everyone_in_the_room_with_its_id_as_seq() {
             ev["data"]["body"], "hello <b>world</b>",
             "raw text; pages escape it"
         );
-        assert_eq!(ev["data"]["author"], "Ann");
+        assert_eq!(ev["data"]["author"], ann.name.as_str());
     }
 }
 
@@ -129,7 +134,7 @@ async fn a_push_cannot_post_as_someone_else() {
     let rows = room_message::Entity::find().all(app.db()).await.unwrap();
     assert_eq!(
         (rows[0].author_id, rows[0].author_name.as_str()),
-        (ann.id, "Ann")
+        (ann.id, ann.name.as_str())
     );
 }
 

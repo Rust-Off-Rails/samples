@@ -187,7 +187,7 @@ async fn reauthorize_removes_a_member_who_lost_access_at_once() {
             v["t"] == "presence" && v["leaves"].get(bob.key()).is_some()
         })
         .await;
-    assert_eq!(left["leaves"][bob.key()]["name"], "Bob");
+    assert_eq!(left["leaves"][bob.key()]["name"], bob.name.as_str());
     a.push("room:backstage", "post", json!({ "body": "just us" }))
         .await
         .unwrap();

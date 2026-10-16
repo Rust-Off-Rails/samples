@@ -464,3 +464,28 @@ text = '''
 "/admin/dashboard",
 "/dev/lab/orders",
 '''
+
+# With auth-core: the read-only production view's admins are accounts (accounts.rs).
+[[wire]]
+file = "src/kernel/dashboard/mod.rs"
+anchor = "dashboard mods"
+when = "auth-core"
+text = '''
+pub mod accounts;
+'''
+
+[[wire]]
+file = "src/kernel/dashboard/access.rs"
+anchor = "dashboard accounts"
+when = "auth-core"
+text = '''
+pub use crate::kernel::dashboard::accounts::{HAS_ACCOUNTS, admin_from_session};
+'''
+
+[[wire]]
+file = "tests/app/main.rs"
+anchor = "test mods"
+when = "auth-core"
+text = '''
+mod dev_dashboard_accounts_test;
+'''

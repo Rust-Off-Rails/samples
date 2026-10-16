@@ -583,6 +583,17 @@ async fn not_me_signs_out_everywhere() {
         .await
         .unwrap();
     let mine = app.sign_in_as(&ada).await;
+    // An email change someone started (a link on its way to their address) must die too.
+    let pending_change = user_token::issue(
+        app.db(),
+        ada.id,
+        user_token::Purpose::EmailChange,
+        "mallory@example.com",
+        None,
+        Utc::now(),
+    )
+    .await
+    .unwrap();
     auth::notify(
         &app.state,
         ada.id,
@@ -614,6 +625,21 @@ async fn not_me_signs_out_everywhere() {
             .unwrap()
             .contains(&Kind::NotMe)
     );
+    assert!(
+        user_token::find_valid(
+            app.db(),
+            user_token::Purpose::EmailChange,
+            &pending_change,
+            Utc::now()
+        )
+        .await
+        .unwrap()
+        .is_none(),
+        "the pending email change is revoked"
+    );
+    app.get(&format!("/account/email/confirm/{pending_change}"))
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
     // Single use.
     app.post_form(&link, &[])
         .await
@@ -1116,10 +1142,21 @@ fn every_session_ending_path_calls_sessions_ended() {
         "session::revoke_all(",
         "auth::revoke_everything(",
         "auth::revoke_other_access(",
-        "session::destroy_by_token(&s.db",
+        "auth::claim_unverified_account(",
+        // Sign-out, and sign-in over an old session (`finish_sign_in`).
+        "session::destroy_by_token(",
     ];
     // The helpers themselves run inside a caller's transaction; the caller reports.
-    const HELPERS: &[&str] = &["revoke_everything(", "revoke_other_access("];
+    const HELPERS: &[&str] = &[
+        "revoke_everything(",
+        "revoke_other_access(",
+        "claim_unverified_account(",
+    ];
+    const REPORTS: &[&str] = &[
+        "sessions_ended(&s,",
+        "sessions_ended(s,",
+        "sessions_ended(state,",
+    ];
     let mut checked = 0;
     for entry in std::fs::read_dir("src/controllers").unwrap() {
         let path = entry.unwrap().path();
@@ -1134,7 +1171,7 @@ fn every_session_ending_path_calls_sessions_ended() {
             checked += 1;
             let name = f.split('(').next().unwrap_or_default();
             assert!(
-                f.contains("sessions_ended(&s,"),
+                REPORTS.iter().any(|r| f.contains(r)),
                 "{}: {name} ends sessions without auth::sessions_ended",
                 path.display()
             );

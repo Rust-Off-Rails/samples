@@ -95,7 +95,7 @@ pub async fn regenerate(
 
 /// Uses a code: marks it used if it is one of the account's unused codes.
 // SECURITY: the conditional UPDATE (`used_at IS NULL`) is the claim, so a code works once even
-// under concurrent requests (test: a_recovery_code_works_only_once)
+// under concurrent requests (test: a_recovery_code_works_only_once, a_recovery_code_used_twice_at_the_same_time_works_once)
 pub async fn redeem(
     db: &impl ConnectionTrait,
     key: &[u8],

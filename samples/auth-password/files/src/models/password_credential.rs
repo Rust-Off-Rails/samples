@@ -9,7 +9,10 @@
 //! - An unknown email (or an account without a password) still runs exactly one verify, against
 //!   a dummy hash, so the response time doesn't reveal whether the account exists.
 
-use std::sync::LazyLock;
+use std::sync::{
+    LazyLock,
+    atomic::{AtomicU64, Ordering},
+};
 
 use argon2::{Algorithm, Argon2, Params, PasswordHasher, PasswordVerifier, Version};
 use chrono::{DateTime, Utc};
@@ -84,11 +87,20 @@ pub struct Checked {
     pub needs_rehash: bool,
 }
 
+/// How many argon2 verifies this process has run: the suite proves an unknown email costs one,
+/// like a known one (nextest runs each test in its own process, so the count is the test's).
+static VERIFIES: AtomicU64 = AtomicU64::new(0);
+
+pub fn verifies_so_far() -> u64 {
+    VERIFIES.load(Ordering::Relaxed)
+}
+
 /// Verifies on the blocking pool. A malformed digest is a mismatch, never an error.
 // SECURITY: argon2's verify compares in constant time
 // (test: hashes_use_argon2id_with_owasp_parameters)
 pub async fn verify(password: String, digest: String) -> Result<Checked, AppError> {
     tokio::task::spawn_blocking(move || {
+        VERIFIES.fetch_add(1, Ordering::Relaxed);
         let Ok(parsed) = argon2::PasswordHash::new(&digest) else {
             return Ok(Checked {
                 ok: false,
@@ -180,6 +192,16 @@ pub async fn rehash(
 ) -> Result<(), AppError> {
     Entity::update_many()
         .col_expr(Column::Digest, sea_orm::sea_query::Expr::value(digest))
+        .filter(Column::UserId.eq(user_id))
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
+/// Deletes the account's password (an unverified account claimed by its address's owner:
+/// `auth::claim_unverified_account`, wired at its anchor).
+pub async fn remove(db: &impl ConnectionTrait, user_id: i64) -> Result<(), AppError> {
+    Entity::delete_many()
         .filter(Column::UserId.eq(user_id))
         .exec(db)
         .await?;

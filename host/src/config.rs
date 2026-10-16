@@ -2,6 +2,7 @@
 //! This is the only module that reads environment variables.
 
 use std::fmt;
+use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 
 /// The human product name: page titles, kernel UIs (/dev), the default MAIL_FROM.
@@ -47,6 +48,14 @@ pub struct Config {
     pub tls: Option<TlsFiles>,
     /// `APP_DEV_HTTP_PORT` (development only, with TLS on): the same app on plain http.
     pub dev_http_port: Option<u16>,
+    /// `APP_BIND`: the address `serve` listens on. Development: 127.0.0.1 (this machine only);
+    /// production: 0.0.0.0 (the container's interface, behind the platform's proxy).
+    pub bind: IpAddr,
+    /// `APP_ALLOWED_HOSTS`: extra `Host` names development answers (a tunnel, a LAN name);
+    /// `.example.com` allows its subdomains too. Localhost and `APP_URL`'s host always work.
+    pub allowed_hosts: Vec<String>,
+    /// `APP_ENV` was not set at all, so this runs as development: `main` warns loudly at boot.
+    pub env_defaulted: bool,
     // samples: config fields
 }
 
@@ -64,7 +73,10 @@ impl fmt::Debug for Config {
             .field("log_format", &self.log_format)
             .field("revision", &self.revision)
             .field("tls", &self.tls.is_some())
-            .field("dev_http_port", &self.dev_http_port);
+            .field("dev_http_port", &self.dev_http_port)
+            .field("bind", &self.bind)
+            .field("allowed_hosts", &self.allowed_hosts)
+            .field("env_defaulted", &self.env_defaulted);
         // samples: config debug
         d.finish()
     }
@@ -100,6 +112,33 @@ pub fn resolve_app_url(env: AppEnv, app_url: Option<&str>, port: u16, https: boo
     }
 }
 
+/// `APP_BIND`, or the environment's default: loopback in development, every interface otherwise.
+// SECURITY: development serves /dev tools (mailbox, dashboard, SQL, logs) without a login; on
+// 0.0.0.0 anyone on the café Wi-Fi could open them. A container sets APP_BIND=0.0.0.0 explicitly
+// (test: development_binds_loopback_unless_told_otherwise).
+pub fn bind_address(env: AppEnv, raw: Option<&str>) -> Result<IpAddr, String> {
+    match raw.map(str::trim).filter(|v| !v.is_empty()) {
+        Some(v) => v
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse()
+            .map_err(|_| {
+                format!("APP_BIND (expected an IP address such as 127.0.0.1 or 0.0.0.0, got {v:?})")
+            }),
+        None if env == AppEnv::Development => Ok(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+        None => Ok(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+    }
+}
+
+/// `APP_ALLOWED_HOSTS`: comma-separated host names, lowercased, ports dropped.
+pub fn parse_allowed_hosts(raw: Option<&str>) -> Vec<String> {
+    raw.unwrap_or_default()
+        .split(',')
+        .map(|h| h.trim().to_ascii_lowercase())
+        .filter(|h| !h.is_empty())
+        .collect()
+}
+
 fn is_localhost(url: &str) -> bool {
     let rest = url.split("://").nth(1).unwrap_or(url);
     let host = rest.split('/').next().unwrap_or_default();
@@ -122,6 +161,9 @@ impl Config {
         if env == AppEnv::Development {
             dotenvy::dotenv().ok();
         }
+        // WHY: checked after `.env` loads, so `APP_ENV=development` in `.env` (bin/setup writes
+        // it) counts as set; only a truly unset APP_ENV (a server missing its config) warns.
+        let env_defaulted = std::env::var("APP_ENV").map_or(true, |v| v.trim().is_empty());
 
         let get = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
         let mut missing: Vec<String> = Vec::new();
@@ -184,6 +226,12 @@ impl Config {
             }
         };
 
+        let bind = bind_address(env, get("APP_BIND").as_deref()).unwrap_or_else(|problem| {
+            invalid.push(problem);
+            IpAddr::V4(Ipv4Addr::LOCALHOST)
+        });
+        let allowed_hosts = parse_allowed_hosts(get("APP_ALLOWED_HOSTS").as_deref());
+
         let log_format = match get("LOG_FORMAT").as_deref() {
             None if production => LogFormat::Json,
             None => LogFormat::Pretty,
@@ -220,6 +268,9 @@ impl Config {
             revision: get("APP_REVISION"),
             tls,
             dev_http_port,
+            bind,
+            allowed_hosts,
+            env_defaulted,
             // samples: config init
         })
     }
@@ -238,6 +289,9 @@ impl Config {
             revision: None,
             tls: None,
             dev_http_port: None,
+            bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            allowed_hosts: Vec::new(),
+            env_defaulted: false,
             // samples: config test
         }
     }
@@ -248,6 +302,23 @@ impl Config {
 
     pub fn is_development(&self) -> bool {
         self.env == AppEnv::Development
+    }
+
+    /// Loud warnings `main` logs right after logging starts.
+    // SECURITY: an unset APP_ENV means development (so `cargo run` just works), and development
+    // mounts /dev tools without a login; on a server that is a missing setting, so it is said at
+    // every boot (test: an_unset_app_env_warns_at_boot).
+    pub fn boot_warnings(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        if self.env_defaulted {
+            warnings.push(
+                "APP_ENV is not set, so this runs as DEVELOPMENT: /dev tools are mounted without a \
+                 login and errors show details. Set APP_ENV=production on every server (the \
+                 Dockerfile does); locally, APP_ENV=development in .env silences this."
+                    .to_owned(),
+            );
+        }
+        warnings
     }
 }
 
@@ -299,6 +370,43 @@ mod tests {
                 false
             ),
             "https://app.example.com"
+        );
+    }
+
+    #[test]
+    fn an_unset_app_env_warns_at_boot() {
+        assert!(Config::test().boot_warnings().is_empty());
+        let unset = Config {
+            env: AppEnv::Development,
+            env_defaulted: true,
+            ..Config::test()
+        };
+        let warnings = unset.boot_warnings();
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].contains("APP_ENV is not set")
+                && warnings[0].to_lowercase().contains("runs as development")
+        );
+    }
+
+    #[test]
+    fn development_binds_loopback_unless_told_otherwise() {
+        let local = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let any = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
+        assert_eq!(bind_address(AppEnv::Development, None), Ok(local));
+        assert_eq!(bind_address(AppEnv::Development, Some("")), Ok(local));
+        // A container opts in.
+        assert_eq!(bind_address(AppEnv::Development, Some("0.0.0.0")), Ok(any));
+        assert_eq!(
+            bind_address(AppEnv::Development, Some("[::1]")),
+            Ok("::1".parse().unwrap())
+        );
+        // Production keeps listening on every interface (its proxy is in front).
+        assert_eq!(bind_address(AppEnv::Production, None), Ok(any));
+        assert!(bind_address(AppEnv::Development, Some("localhost")).is_err());
+        assert_eq!(
+            parse_allowed_hosts(Some(" Dev.Example.com, .tunnel.example ,")),
+            ["dev.example.com", ".tunnel.example"]
         );
     }
 

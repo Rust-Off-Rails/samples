@@ -7,7 +7,8 @@ Passwordless sign-in (Phoenix 1.8's default, the framework's `ACCOUNTS: magic-li
 - **Race-safe**: using a link deletes its row in the same transaction that starts the session; of two simultaneous clicks exactly one signs in.
 - **Scanner-safe**: opening the link shows "Continue as ada@example.com" with a button; only the POST signs in, so mail scanners and link previews can't burn it.
 - **Bound to the asking browser, by default**: the link and the code only work in the browser that asked for them. That stops **login CSRF** (an attacker mailing you a link to *their* account) and forwarded links. The code covers the other-device case; `APP_MAGIC_LINK_ANY_BROWSER=true` lifts the binding if you must.
-- **5 wrong codes burn the link**, plus a per-network cap on guesses; requests are limited per network **and per address across networks** (10 per 3 minutes each).
+- **5 wrong codes burn the link**, and wrong codes count **per address across every link** in `auth_throttles` (growing pauses), plus a per-network cap on guesses; requests are limited per network **and per address across networks** (10 per 3 minutes each, 20 per address per day).
+- **Pre-hijacking safe with passwords**: signing in by link or code to an account someone registered but never verified (auth-password) drops that account's password, sessions and tokens first (`auth::claim_unverified_account`).
 - **No enumeration**: every valid address gets the same redirect and an email (the first use creates the account).
 - **Re-auth by emailed code** for sensitive actions ("Email me a code" on "Confirm it's you"); refused when two-factor is on.
 - **The dev mailbox hint** on "Check your email" in development, and links built from the address actually served, so a development link never points at a stale port.
@@ -42,6 +43,7 @@ Through the samples MCP server: `get_sample auth-magic-link`. By hand, in the ap
    - `migration/src/lib.rs`: the `login_links` migration; `.env.example`: `APP_MAGIC_LINK_ANY_BROWSER`.
    - `src/kernel/redact.rs`: `/login_links/{token}` in `TOKEN_ROUTES`, so logs show `[redacted]` for it.
    - `tests/app/main.rs`: `mod auth_magic_link_test;`.
+   - With auth-password installed: `mod auth_magic_link_password_test;` in `tests/app/main.rs` (the cross-method pre-hijacking tests; the file is copied either way and compiled only then).
 4. `cargo fmt --all && cargo run -- db migrate && cargo run -q -- routes`, then the Definition of Done.
 
 `tools/install.sh auth-magic-link <app>` does it all, auth-core included.
@@ -74,7 +76,8 @@ Through the samples MCP server: `get_sample auth-magic-link`. By hand, in the ap
 - GET never signs in (`opening_a_link_twice_then_posting_still_signs_in`).
 - The claim is the DELETE inside the session transaction (`a_link_works_once_even_when_used_twice_at_the_same_time`).
 - Browser binding on by default; codes only in the asking browser (`a_link_opened_in_another_browser_is_refused_by_default`, `the_code_signs_in_only_in_the_browser_that_asked`).
-- The attempt is counted before the code is compared (`a_code_allows_five_wrong_guesses_then_burns_the_link`).
+- The attempt is counted before the code is compared (`a_code_allows_five_wrong_guesses_then_burns_the_link`), and counted against the address too (`code_guesses_are_throttled_per_address_across_links`).
+- `finish` claims an unverified account with `auth::claim_unverified_account`, never a bare `user::mark_verified` (`a_password_set_before_verification_dies_when_the_owner_signs_in_by_link`).
 - Identical responses for known and unknown addresses (`known_and_unknown_addresses_get_identical_responses`).
 - Tokens and codes are minted in the background task; nothing is logged (`link_tokens_and_codes_never_reach_the_logs`).
 - Links come from `config.app_url` (`links_follow_the_app_url_being_served_not_a_stale_port`).

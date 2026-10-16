@@ -249,6 +249,13 @@ text = '''
 '''
 
 [[wire]]
+file = "src/controllers/auth.rs"
+anchor = "claim unverified account"
+text = '''
+crate::models::password_credential::remove(txn, user_id).await?;
+'''
+
+[[wire]]
 file = "tests/app/main.rs"
 anchor = "test mods"
 text = '''

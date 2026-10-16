@@ -24,6 +24,8 @@ use tokio::{
 };
 use tracing::{Instrument, error, info, info_span, warn};
 
+use crate::kernel::redact;
+
 use super::{
     DispatchFn, JobInfo, JobState, Outcome, QueueSpec, WorkerConfigFn, job, job_queue,
     plugins::{self, Recurring},
@@ -213,13 +215,17 @@ pub fn push_error(
     error: &AttemptError,
 ) -> Value {
     let mut errors = existing.as_array().cloned().unwrap_or_default();
+    // SECURITY: an error often quotes the URL that failed, credentials and tokens included; the
+    // stored text (shown on the dashboard, searched, printed by `app jobs`) is redacted first
+    // (test: job_errors_are_stored_redacted)
+    let message = redact::text(&error.message);
     let mut entry = json!({
         "attempt": attempt,
         "at": now.to_rfc3339(),
-        "error": truncate(&error.message, ERROR_CAP_BYTES),
+        "error": truncate(&message, ERROR_CAP_BYTES),
     });
     if let Some(detail) = error.detail.as_deref().filter(|d| *d != error.message) {
-        entry["detail"] = json!(truncate(detail, ERROR_CAP_BYTES));
+        entry["detail"] = json!(truncate(&redact::text(detail), ERROR_CAP_BYTES));
     }
     if let Some(node) = node {
         entry["node"] = json!(node);
@@ -398,6 +404,8 @@ pub async fn execute(
             Ok(Ok(Ok(outcome))) => Ok(outcome),
         }
         .map_err(|e| AttemptError {
+            // The log line below carries the message too: redacted like the stored copy.
+            message: redact::text(&e.message),
             duration_ms: Some(duration_ms),
             ..e
         });

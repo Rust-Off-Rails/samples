@@ -508,8 +508,9 @@ pub struct WaterRow {
 }
 
 /// The trace as a waterfall: the request, then each span with its SQL and events, in start order,
-/// indented under its parent.
-pub fn waterfall(t: &Trace) -> Vec<WaterRow> {
+/// indented under its parent. `details: false` (the read-only production view) leaves out log
+/// events and span fields: they carry whatever the app logged (emails, ids, amounts).
+pub fn waterfall(t: &Trace, details: bool) -> Vec<WaterRow> {
     let total = t.dur_us.max(1);
     let scale = |start: u64, dur: u64| {
         let x = (start.min(total) * 1000) / total;
@@ -528,7 +529,7 @@ pub fn waterfall(t: &Trace) -> Vec<WaterRow> {
             WaterRow {
                 kind: "span",
                 label: s.name.to_owned(),
-                detail: if s.fields.is_empty() {
+                detail: if s.fields.is_empty() || !details {
                     s.target.to_owned()
                 } else {
                     format!("{} {}", s.target, s.fields)
@@ -569,7 +570,7 @@ pub fn waterfall(t: &Trace) -> Vec<WaterRow> {
             },
         ));
     }
-    for e in &t.events {
+    for e in t.events.iter().filter(|_| details) {
         let (x, _) = scale(e.at_us, 0);
         items.push((
             e.at_us,

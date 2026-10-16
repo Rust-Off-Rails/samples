@@ -267,11 +267,22 @@ async fn unknown_and_known_emails_take_the_same_path() {
     let app = TestApp::new().await;
     factories::user_with_password(app.db(), "ada@example.com").await;
     let before = app.query_count();
+    let verified = password_credential::verifies_so_far();
     let wrong = sign_in(&app, "ada@example.com", "definitely not it").await;
     let known_queries = app.query_count() - before;
+    let known_verifies = password_credential::verifies_so_far() - verified;
     let before = app.query_count();
+    let verified = password_credential::verifies_so_far();
     let unknown = sign_in(&app, "nobody@example.com", "definitely not it").await;
     let unknown_queries = app.query_count() - before;
+    let unknown_verifies = password_credential::verifies_so_far() - verified;
+    // The timing defense itself: an unknown address runs exactly one argon2 verify (against the
+    // dummy hash), like a known one, so the response time doesn't enumerate accounts.
+    assert_eq!(known_verifies, 1, "a known address costs one argon2 verify");
+    assert_eq!(
+        unknown_verifies, 1,
+        "an unknown address costs one argon2 verify too"
+    );
     assert_eq!(wrong.status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(wrong.status, unknown.status);
     assert_eq!(
@@ -526,6 +537,73 @@ async fn a_reset_ends_every_other_session() {
             .unwrap()
             .contains(&Kind::PasswordReset)
     );
+}
+
+/// An email change someone started (its link on the way to their address) dies when the owner
+/// resets the password, or it would move the account after the owner secured it.
+async fn pending_email_change(app: &TestApp, user_id: i64) -> String {
+    user_token::issue(
+        app.db(),
+        user_id,
+        user_token::Purpose::EmailChange,
+        "mallory@example.com",
+        None,
+        Utc::now(),
+    )
+    .await
+    .unwrap()
+}
+
+async fn assert_email_change_dead(app: &TestApp, token: &str) {
+    assert!(
+        user_token::find_valid(
+            app.db(),
+            user_token::Purpose::EmailChange,
+            token,
+            Utc::now()
+        )
+        .await
+        .unwrap()
+        .is_none(),
+        "the pending email change is revoked"
+    );
+    app.post_form(&format!("/account/email/confirm/{token}"), &[])
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_password_reset_cancels_a_pending_email_change() {
+    let app = TestApp::new().await;
+    let ada = factories::user_with_password(app.db(), "ada@example.com").await;
+    let change = pending_email_change(&app, ada.id).await;
+    let edit = reset_link(&app, "ada@example.com").await;
+    app.post_form(
+        edit.trim_end_matches("/edit"),
+        &[("password", NEW_PASSWORD)],
+    )
+    .await
+    .assert_redirect_to("/account");
+    assert_email_change_dead(&app, &change).await;
+    assert_eq!(
+        user::find_self(app.db(), ada.id).await.unwrap().email,
+        "ada@example.com"
+    );
+}
+
+#[tokio::test]
+async fn a_password_change_cancels_a_pending_email_change() {
+    let app = TestApp::new().await;
+    let ada = factories::user_with_password(app.db(), "ada@example.com").await;
+    app.sign_in_as(&ada).await;
+    let change = pending_email_change(&app, ada.id).await;
+    app.post_form(
+        "/account/password",
+        &[("current_password", PASSWORD), ("password", NEW_PASSWORD)],
+    )
+    .await
+    .assert_redirect_to("/account");
+    assert_email_change_dead(&app, &change).await;
 }
 
 #[tokio::test]

@@ -8,6 +8,7 @@
 //! | production, `DASHBOARD_IN_PRODUCTION=true`, `APP_ADMIN_PASSWORD` set | HTTP Basic, constant time, failed tries limited |
 //! | anything else | not mounted (404), and nothing is recorded |
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use axum::extract::FromRequestParts;
@@ -24,20 +25,47 @@ use crate::state::AppState;
 const FAILED_LIMIT: u32 = 10;
 const FAILED_WINDOW: Duration = Duration::from_secs(180);
 
-/// APP: `true` once an authentication sample is installed and `admin_from_session` asks it.
-pub const HAS_ACCOUNTS: bool = false;
+// Who is signed in, when the app has accounts. With auth-core installed, an optional wire puts an
+// explicit `pub use` of `accounts::{HAS_ACCOUNTS, admin_from_session}` here; explicit names win
+// over the glob below, so `no_accounts` stays compiled but unused.
+// samples: dashboard accounts
+#[allow(unused_imports)] // WHY: with auth-core, both names come from `accounts` instead
+pub use no_accounts::*;
 
-/// APP: the hook into your authentication: `Some(true)` for a signed-in admin, `Some(false)` for a
-/// signed-in non-admin, `None` when nobody is signed in. With an auth sample:
-///
-/// ```ignore
-/// match crate::controllers::application::CurrentUser::from_request_parts(parts, state).await {
-///     Ok(CurrentUser(user)) => Some(user.is_admin()),
-///     Err(_) => None,
-/// }
-/// ```
-async fn admin_from_session(_parts: &mut Parts, _state: &AppState) -> Option<bool> {
-    None
+/// Without an authentication sample: no accounts, so only `APP_ADMIN_PASSWORD` opens the view.
+pub mod no_accounts {
+    use axum::http::request::Parts;
+
+    use crate::state::AppState;
+
+    pub const HAS_ACCOUNTS: bool = false;
+
+    /// `Some(true)` for a signed-in admin, `Some(false)` for a signed-in non-admin, `None` when
+    /// nobody is signed in. Nobody ever is, here.
+    pub async fn admin_from_session(_parts: &mut Parts, _state: &AppState) -> Option<bool> {
+        None
+    }
+}
+
+/// Warned once per process: X-Forwarded-For arrived but `APP_TRUSTED_PROXY` is off.
+static UNTRUSTED_FORWARDED_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// Behind a proxy without `APP_TRUSTED_PROXY`, every client has the proxy's address, so they all
+/// share one failed-password budget: anyone can lock the admins out (for `FAILED_WINDOW` at a
+/// time) by failing on purpose. A known trade-off of keying by IP; this makes it visible.
+// SECURITY: the misconfiguration that turns the lockout into a denial of service is logged once
+// (test: an_untrusted_forwarded_for_header_warns_once)
+fn warn_if_forwarded_untrusted(parts: &Parts, state: &AppState) {
+    if !state.config.trusted_proxy
+        && parts.headers.contains_key("x-forwarded-for")
+        && !UNTRUSTED_FORWARDED_WARNED.swap(true, Ordering::Relaxed)
+    {
+        tracing::warn!(
+            "dashboard: requests carry X-Forwarded-For but APP_TRUSTED_PROXY is off, so every client \
+             behind the proxy shares one failed-password budget and anyone can lock the admins out; \
+             set APP_TRUSTED_PROXY=true when the app runs behind a proxy"
+        );
+    }
 }
 
 /// Whether `/admin/dashboard` is mounted in production.
@@ -66,14 +94,15 @@ impl FromRequestParts<AppState> for DashboardAccess {
         }
         match admin_from_session(parts, state).await {
             Some(true) => return Ok(Self),
-            // SECURITY: a signed-in non-admin learns nothing: the page "doesn't exist"
-            // (test: the_production_dashboard_needs_the_admin_password).
+            // SECURITY: a signed-in non-admin learns nothing: the page "doesn't exist", even with
+            // the right Basic password (test: a_signed_in_non_admin_gets_404_from_the_production_view).
             Some(false) => return Err(AppError::NotFound.into_response()),
             None => {}
         }
         let Some(expected) = state.config.dashboard.admin_password.as_deref() else {
             return Err(AppError::Unauthorized.into_response());
         };
+        warn_if_forwarded_untrusted(parts, state);
         let ip = ClientIp::from_request_parts(parts, state)
             .await
             .unwrap_or(ClientIp(None));
@@ -124,7 +153,10 @@ fn basic_password(parts: &Parts) -> Option<String> {
     Some(password.to_owned())
 }
 
-/// Compares SHA-256 digests in constant time (no timing hint of how much of a guess was right).
+/// Compares the SHA-256 digests of both (fixed-length, so the length of the password leaks
+/// nothing) with a branch-free fold over every byte: no early exit that would hint how much of a
+/// guess was right. Best effort: the compiler may still optimize, which is why the rate limit, not
+/// this, is the real guard.
 fn same_secret(given: &str, expected: &str) -> bool {
     let a = Sha256::digest(given.as_bytes());
     let b = Sha256::digest(expected.as_bytes());

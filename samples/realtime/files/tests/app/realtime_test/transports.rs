@@ -43,7 +43,7 @@ async fn sse_and_post_speak_the_protocol_and_talk_to_websocket_clients() {
     let ev = sse
         .recv_where("Bob's message", |v| v["data"]["body"] == "over a socket")
         .await;
-    assert_eq!(ev["data"]["author"], "Bob");
+    assert_eq!(ev["data"]["author"], bob.name.as_str());
 }
 
 #[tokio::test]

@@ -23,7 +23,7 @@ async fn two_tabs_are_one_person_until_the_last_one_leaves() {
             v["t"] == "presence" && v["joins"].get(ann.key()).is_some()
         })
         .await;
-    assert_eq!(joined["joins"][ann.key()]["name"], "Ann");
+    assert_eq!(joined["joins"][ann.key()]["name"], ann.name.as_str());
 
     let mut tab2 = Ws::as_guest(addr, &ann).await;
     tab2.join("room:lobby", None).await.unwrap();
@@ -53,7 +53,7 @@ async fn two_tabs_are_one_person_until_the_last_one_leaves() {
             v["t"] == "presence" && v["leaves"].get(ann.key()).is_some()
         })
         .await;
-    assert_eq!(left["leaves"][ann.key()]["name"], "Ann");
+    assert_eq!(left["leaves"][ann.key()]["name"], ann.name.as_str());
     assert!(!app.state.hub.is_present("room:lobby", &ann.key()));
 }
 
@@ -110,7 +110,10 @@ async fn typing_reaches_the_others_but_none_of_the_typists_tabs() {
     }
     ann1.push("room:lobby", "typing", json!({})).await.unwrap();
     let typing = b.event("room:lobby", "typing").await;
-    assert_eq!(typing["data"], json!({ "key": ann.key(), "name": "Ann" }));
+    assert_eq!(
+        typing["data"],
+        json!({ "key": ann.key(), "name": ann.name })
+    );
     assert!(
         typing.get("seq").is_none(),
         "ephemeral: no cursor, never replayed"
@@ -145,7 +148,7 @@ async fn a_wave_reaches_only_its_target_on_their_private_topic() {
         .await
         .unwrap();
     let waved = b.event(&format!("user:{}", bob.id), "waved").await;
-    assert_eq!(waved["data"], json!({ "from": "Ann", "room": "lobby" }));
+    assert_eq!(waved["data"], json!({ "from": ann.name, "room": "lobby" }));
     assert!(c.quiet(300, |v| v["event"] == "waved").await);
 
     // Not in the room, or yourself: refused (no pinging arbitrary ids).

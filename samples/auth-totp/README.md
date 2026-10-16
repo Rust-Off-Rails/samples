@@ -42,7 +42,7 @@ Through the samples MCP server: `get_sample auth-totp`. By hand, in the app root
    - `src/kernel/mod.rs`: `secret_box`; `src/models/mod.rs`: `pending_login`, `recovery_code`, `totp_credential`, `trusted_device`; `src/controllers/mod.rs` and `src/views/mod.rs`: `two_factor`.
    - `src/config.rs`: a `totp: TotpConfig` field (`APP_TOTP_ENCRYPTION_KEY`, `APP_TOTP_ENCRYPTION_KEY_PREVIOUS`) with its section, parse, test and `Debug` lines.
    - `src/routes.rs`: the routes below, their `paths::` helpers and `ROUTES` rows.
-   - auth-core's `src/controllers/auth.rs`: the `intercept` call at `before sign in`, the check at `step-up second factor`, and the trusted-device/pending-sign-in cleanup at `revoke everything` and `revoke other access`.
+   - auth-core's `src/controllers/auth.rs`: the `intercept` call at `before sign in`, the check at `step-up second factor`, the trusted-device/pending-sign-in cleanup at `revoke everything` and `revoke other access`, and the removal of everything two-factor at `claim unverified account`.
    - auth-core's account page (`account fields`, `account load`, `account init`, `account sections`) and "Confirm it's you" (`confirm second factor`); `src/tasks/auth_cleanup.rs` and `src/tasks/auth_demo.rs`.
    - `migration/src/lib.rs`: the two-factor migration; `.env.example`, `compose.yaml`: the key.
    - `tests/app/main.rs`: `mod auth_totp_test;`.

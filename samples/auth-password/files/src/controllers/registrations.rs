@@ -160,8 +160,12 @@ pub async fn create(
     let pending = match &existing {
         // A verified account (or a passwordless one): tell the owner, change nothing.
         Some(u) if u.is_verified() => None,
-        // An unverified sign-up: the latest one wins (defense 1).
-        Some(u) => Some(u.clone()),
+        // An unverified sign-up: the latest one wins (defense 1), unless the owner verifies it
+        // meanwhile (a magic link): the row lock orders the two.
+        // SECURITY: a sign-up racing the owner's verification can't leave its password behind
+        // (test: a_password_set_before_verification_dies_when_the_owner_signs_in_by_link)
+        Some(u) if user::lock_unverified(&txn, u.id, now).await? => Some(u.clone()),
+        Some(_) => None,
         None => {
             let u = user::find_or_create(&txn, &email, now).await?;
             auth_event::record(&txn, Some(u.id), Kind::SignedUp, &meta.meta, now).await?;

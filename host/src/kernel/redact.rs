@@ -94,6 +94,80 @@ fn path_with(path: &str, routes: &[&str]) -> String {
         .join("/")
 }
 
+/// Free text (an error message, a job's failure reason) with secrets replaced by `[redacted]`:
+/// a URL's `user:password@`, its token path segments and secret query values; `key=value` pairs
+/// whose key names a secret (`password=…`, `api_key=…`); and long random-looking words (tokens).
+/// For text that is stored or shown after the fact, where `uri` can't be applied up front.
+// SECURITY: errors often quote the URL that failed, with its credentials; stored or shown error
+// text goes through here first (test: secrets_in_free_text_are_redacted).
+pub fn text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut word = String::new();
+    for c in s.chars() {
+        if c.is_whitespace()
+            || matches!(
+                c,
+                '"' | '\'' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';' | '`'
+            )
+        {
+            out.push_str(&word_redacted(&word));
+            word.clear();
+            out.push(c);
+        } else {
+            word.push(c);
+        }
+    }
+    out.push_str(&word_redacted(&word));
+    out
+}
+
+fn word_redacted(word: &str) -> String {
+    if word.is_empty() {
+        return String::new();
+    }
+    if let Some((scheme, rest)) = word.split_once("://") {
+        let split = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+        let (authority, tail) = rest.split_at(split);
+        let host = match authority.rsplit_once('@') {
+            Some((_, host)) => format!("{REDACTED}@{host}"),
+            None => authority.to_owned(),
+        };
+        let (before_fragment, fragment) = match tail.split_once('#') {
+            Some((b, f)) => (b, Some(f)),
+            None => (tail, None),
+        };
+        let (p, q) = match before_fragment.split_once('?') {
+            Some((p, q)) => (p, Some(q)),
+            None => (before_fragment, None),
+        };
+        let mut out = format!(
+            "{scheme}://{host}{}",
+            if p.is_empty() { String::new() } else { path(p) }
+        );
+        if let Some(q) = q {
+            out.push('?');
+            out.push_str(&query(q));
+        }
+        if let Some(f) = fragment {
+            out.push('#');
+            out.push_str(&query(f));
+        }
+        return out;
+    }
+    if let Some((k, v)) = word.split_once(['=', ':'])
+        && !k.is_empty()
+        && !v.is_empty()
+        && (is_secret_param(k.trim_start_matches(['-', '?', '&'])) || looks_random(v))
+    {
+        let sep = &word[k.len()..k.len() + 1];
+        return format!("{k}{sep}{REDACTED}");
+    }
+    if looks_random(word.trim_end_matches(['.', ':'])) {
+        return REDACTED.to_owned();
+    }
+    word.to_owned()
+}
+
 fn query(q: &str) -> String {
     q.split('&')
         .map(|pair| match pair.split_once('=') {
@@ -169,6 +243,29 @@ mod tests {
         ] {
             assert_eq!(path(keep), keep);
         }
+    }
+
+    #[test]
+    fn secrets_in_free_text_are_redacted() {
+        let shown = text(&format!(
+            "GET https://deploy:hunter2@api.example.com/v1/hooks?token=abc123&page=2 failed: 401 (key {TOKEN}); retry with password=swordfish"
+        ));
+        for secret in ["deploy", "hunter2", "abc123", TOKEN, "swordfish"] {
+            assert!(!shown.contains(secret), "{secret} in {shown}");
+        }
+        assert_eq!(
+            shown,
+            "GET https://[redacted]@api.example.com/v1/hooks?token=[redacted]&page=2 failed: 401 (key [redacted]); retry with password=[redacted]"
+        );
+        // Ordinary text is untouched, and redacting twice changes nothing.
+        let plain =
+            "charging card 42: connection refused (os error 61) at hooks.partner.invalid:443";
+        assert_eq!(text(plain), plain);
+        assert_eq!(text(&shown), shown);
+        assert_eq!(
+            text("postgres://u:p@db/app"),
+            "postgres://[redacted]@db/app"
+        );
     }
 
     #[test]

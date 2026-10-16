@@ -120,20 +120,41 @@ pub async fn find_or_create(
     find_by_email(db, &email).await?.ok_or(AppError::NotFound)
 }
 
-/// Marks the address verified (a link or code sent to it was used). Idempotent.
+/// Marks the address verified (a link or code sent to it was used). Idempotent: `true` when this
+/// call verified it, `false` when it already was. Inside a transaction the UPDATE also locks the
+/// row until commit (Postgres), so whatever the caller does next to an account it just verified
+/// can't interleave with a concurrent sign-up for the same address.
 pub async fn mark_verified(
     db: &impl ConnectionTrait,
     user_id: i64,
     now: DateTime<Utc>,
-) -> Result<(), AppError> {
-    Entity::update_many()
+) -> Result<bool, AppError> {
+    let updated = Entity::update_many()
         .col_expr(Column::EmailVerifiedAt, Expr::value(now))
         .col_expr(Column::UpdatedAt, Expr::value(now))
         .filter(Column::Id.eq(user_id))
         .filter(Column::EmailVerifiedAt.is_null())
         .exec(db)
         .await?;
-    Ok(())
+    Ok(updated.rows_affected == 1)
+}
+
+/// Locks an **unverified** account's row for the rest of the transaction: `false` when it is
+/// verified (or gone). A sign-up that replaces an unverified account's password takes this first,
+/// so it either commits before the owner's verification (which then removes that password) or
+/// waits for it and sees the account verified.
+pub async fn lock_unverified(
+    db: &impl ConnectionTrait,
+    user_id: i64,
+    now: DateTime<Utc>,
+) -> Result<bool, AppError> {
+    let updated = Entity::update_many()
+        .col_expr(Column::UpdatedAt, Expr::value(now))
+        .filter(Column::Id.eq(user_id))
+        .filter(Column::EmailVerifiedAt.is_null())
+        .exec(db)
+        .await?;
+    Ok(updated.rows_affected == 1)
 }
 
 /// Changes the address (after the new one was confirmed). `Err(Invalid)` when another account

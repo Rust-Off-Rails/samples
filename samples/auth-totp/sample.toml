@@ -357,6 +357,16 @@ APP_TOTP_ENCRYPTION_KEY: ${APP_TOTP_ENCRYPTION_KEY:?set APP_TOTP_ENCRYPTION_KEY 
 '''
 
 [[wire]]
+file = "src/controllers/auth.rs"
+anchor = "claim unverified account"
+text = '''
+crate::models::totp_credential::remove(txn, user_id).await?;
+crate::models::recovery_code::remove_all(txn, user_id).await?;
+crate::models::trusted_device::revoke_all(txn, user_id).await?;
+crate::models::pending_login::revoke_all(txn, user_id).await?;
+'''
+
+[[wire]]
 file = "tests/app/main.rs"
 anchor = "test mods"
 text = '''

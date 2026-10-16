@@ -6,6 +6,7 @@ pub mod cookie;
 pub mod css;
 pub mod db;
 pub mod flash;
+pub mod hosts;
 pub mod introspect;
 pub mod rate_limit;
 pub mod redact;

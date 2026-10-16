@@ -154,3 +154,75 @@ fn every_mounted_route_is_in_the_routes_table() {
         "mounted but not in ROUTES (add the row with its real Access): {missing:#?}"
     );
 }
+
+/// DNS rebinding: a page on `evil.example` re-points its name at 127.0.0.1 and reads the
+/// development tools same-origin. Development refuses any `Host` that isn't this machine,
+/// `APP_URL`'s or an `APP_ALLOWED_HOSTS` entry, before any handler runs; the page says how to
+/// allow a host on purpose.
+#[tokio::test]
+async fn development_refuses_a_rebound_host_name() {
+    let app = TestApp::with_config(development()).await;
+    for path in ["/dev", "/", "/up"] {
+        let res = app
+            .get_with_headers(path, &[("host", "evil.example:3000")])
+            .await;
+        res.assert_status(StatusCode::FORBIDDEN)
+            .assert_contains("Blocked host: evil.example")
+            .assert_contains("APP_ALLOWED_HOSTS=evil.example");
+        assert!(
+            res.headers.contains_key("content-security-policy"),
+            "the refusal carries the header matrix"
+        );
+    }
+    // A same-origin POST from the rebound page (Fetch Metadata and Origin agree) is refused too:
+    // the CSRF layer alone would pass it.
+    app.post_form_with_headers(
+        "/theme",
+        &[("theme", "dark")],
+        &[
+            ("host", "evil.example:3000"),
+            ("origin", "http://evil.example:3000"),
+        ],
+    )
+    .await
+    .assert_status(StatusCode::FORBIDDEN);
+    // Markup in the Host header is escaped on the page.
+    app.get_with_headers("/", &[("host", "a<b>.example")])
+        .await
+        .assert_status(StatusCode::FORBIDDEN)
+        .assert_not_contains("a<b>");
+}
+
+#[tokio::test]
+async fn development_answers_local_and_configured_hosts() {
+    let app = TestApp::with_config(Config {
+        app_url: "https://dev.example.com".into(),
+        allowed_hosts: vec!["tunnel.example".into(), ".lan.example".into()],
+        ..development()
+    })
+    .await;
+    for host in [
+        "localhost:3000",
+        "127.0.0.1:3000",
+        "[::1]:3000",
+        "dev.example.com",
+        "tunnel.example",
+        "box.lan.example:3000",
+    ] {
+        app.get_with_headers("/up", &[("host", host)])
+            .await
+            .assert_ok();
+    }
+    // No Host at all (HTTP/1.0, a health probe): nothing to rebind.
+    app.get("/up").await.assert_ok();
+}
+
+#[tokio::test]
+async fn production_and_test_answer_any_host() {
+    for config in [production(), Config::test()] {
+        let app = TestApp::with_config(config).await;
+        app.get_with_headers("/up", &[("host", "evil.example")])
+            .await
+            .assert_ok();
+    }
+}

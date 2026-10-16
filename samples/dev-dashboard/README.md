@@ -17,7 +17,7 @@ Everything your app is doing, live, at **`/dev/dashboard`**: memory, CPU, reques
 - **Config**: settings and the app's env vars with secrets redacted, OS and build info, and what the dashboard itself holds in memory.
 - **For agents**: `/dev/dashboard.json` and a `dashboard` section in `/dev/introspect.json`.
 - **It costs little**: about 1 µs per request for the middleware in a release build, 6 µs for a whole development request with its SQL recorded (see [How it works](#how-it-works)), fixed-size memory (a test pushes 20,000 requests and 5,000 statements through it and checks every bound), nothing at all outside development unless you turn on the production view.
-- **Development only** by default (404 in production, proven by a test). Optionally a **read-only** subset at `/admin/dashboard` in production, behind the admin password or your admin accounts: no load lab, no EXPLAIN, no parameters, no logs.
+- **Development only** by default (404 in production, proven by a test). Optionally a **read-only** subset at `/admin/dashboard` in production, behind the admin password or your admin accounts: no load lab, no EXPLAIN, no parameters, no logs, and traces without their log events or span fields.
 
 Guides: [`.offrails/guides/dev-tools.md`](https://rustoffrails.org/docs/dev-tools) · [`errors-and-logging.md`](https://rustoffrails.org/docs/errors-and-logging) · [`database.md`](https://rustoffrails.org/docs/database) · [`testing.md`](https://rustoffrails.org/docs/testing) · [`security.md`](https://rustoffrails.org/docs/security).
 
@@ -67,6 +67,7 @@ Through the samples MCP server: `get_sample dev-dashboard`. Or by hand, in the a
    - `templates/layouts/application.html`: a footer link `<a href="{{ paths::dev_dashboard() }}" hx-boost="false" class="link">Dashboard</a>`.
    - `.env.example`: `GITHUB_REPO`, `GITHUB_TOKEN`, `DASHBOARD_IN_PRODUCTION`.
    - `tests/app/main.rs`: `mod dev_dashboard_test;`; `security_test.rs` router sources: `src/kernel/dashboard/web.rs`, `src/kernel/dashboard/lab.rs`; `kernel_web_test.rs` no-store paths; `theme_switch_test.rs` kernel pages.
+   - With auth-core installed: `pub mod accounts;` at `dashboard mods` in `src/kernel/dashboard/mod.rs`, `pub use crate::kernel::dashboard::accounts::{HAS_ACCOUNTS, admin_from_session};` at `dashboard accounts` in `src/kernel/dashboard/access.rs`, and `mod dev_dashboard_accounts_test;` in `tests/app/main.rs`.
 4. `cargo fmt --all && cargo run -- db migrate && cargo run -- routes`, then the Definition of Done.
 
 `tools/install.sh dev-dashboard <app>` does steps 1 to 3.
@@ -84,7 +85,7 @@ Through the samples MCP server: `get_sample dev-dashboard`. Or by hand, in the a
 - **Load-test your own pages**: point `lab::seed` (`// APP:` in `kernel/dashboard/lab.rs`) at your models, then put your routes in the Traffic form or `app bench --route`. Drop the `lab_orders` tables with a new migration when you no longer need them.
 - **A panel for your own subsystem** (realtime, a payment queue): implement `PanelProvider` and add it to `providers()` (`// APP:` in `kernel/dashboard/panels.rs`; the realtime example is in its header).
 - **Your own insight rules**: return findings from `custom_rules` (`// APP:` in `kernel/dashboard/insights.rs`); tune the thresholds at the top of that file (slow route p95, slow query p95, table sizes).
-- **The dashboard in production, read-only**: `DASHBOARD_IN_PRODUCTION=true` and `APP_ADMIN_PASSWORD` (16+ characters), or set `HAS_ACCOUNTS` and `admin_from_session` (`// APP:` in `kernel/dashboard/access.rs`) to use your admin accounts. It records in production then (a few µs per request).
+- **The dashboard in production, read-only**: `DASHBOARD_IN_PRODUCTION=true` and `APP_ADMIN_PASSWORD` (16+ characters), or your admin accounts: with auth-core installed, the optional wiring compiles `kernel/dashboard/accounts.rs` (signed-in people are asked first; `is_admin` is the `// APP:` hook, nobody until you add a role), otherwise write your own `admin_from_session` beside `no_accounts` in `kernel/dashboard/access.rs`. Behind a proxy set `APP_TRUSTED_PROXY=true`, or every client shares one failed-password budget (a warning says so once). It records in production then (a few µs per request).
 - **Send traces to a collector**: set `OTLP_EXPORT` and fill `export` (`// APP:` in `kernel/dashboard/trace.rs`) with the opentelemetry crates.
 - **More history or a smaller footprint**: `RECENT`, `NOTABLE`, `LOG_LINES` (`trace.rs`), `MAX_FINGERPRINTS` (`sql.rs`), `N_PLUS_ONE` and `IGNORED` (`http.rs`), `MAX_RPS`/`MAX_SECS` (`lab.rs`); every one is `// APP:`.
 
@@ -142,6 +143,7 @@ Annotations (boot, load-lab runs, error bursts over `ERROR_BURST` per second, th
 | `src/kernel/dashboard/lab.rs`, `cli.rs` | the load lab, `app bench`, `app test`, `app dashboard` |
 | `src/kernel/dashboard/testruns.rs`, `github.rs` | test runs (JUnit, nextest), the GitHub client |
 | `src/kernel/dashboard/web.rs`, `access.rs` | routers, pages, streams; the production gate |
+| `src/kernel/dashboard/accounts.rs` | with auth-core: the production gate asks the signed-in account (compiled only then) |
 | `migration/src/m20261016_000600_create_lab_orders.rs` | the lab's fake orders |
 | `templates/kernel/dashboard/*.html` | the pages and fragments |
 | `static/kernel/dashboard.css`, `dashboard.js` | its own styles and behavior |

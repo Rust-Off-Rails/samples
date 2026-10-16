@@ -67,6 +67,9 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let config = Config::from_env()?;
     init_tracing(&config);
+    for warning in config.boot_warnings() {
+        tracing::warn!("{warning}");
+    }
 
     match cli.command.unwrap_or(Command::Serve) {
         Command::Serve => serve(config).await,
@@ -97,13 +100,25 @@ fn init_tracing(config: &Config) {
     let layers: Vec<Box<dyn Layer<Registry> + Send + Sync>> = vec![
         // samples: tracing layers
     ];
-    let registry = tracing_subscriber::registry().with(layers).with(filter);
+    let registry = tracing_subscriber::registry()
+        .with(sample_layers(layers))
+        .with(filter);
     match config.log_format {
         LogFormat::Json => registry
             .with(tracing_subscriber::fmt::layer().json())
             .init(),
         LogFormat::Pretty => registry.with(tracing_subscriber::fmt::layer()).init(),
     }
+}
+
+/// The samples' layers, or none at all.
+// WHY: an empty `Vec` layer answers `Interest::never()` for every callsite, which silences the
+// whole subscriber (no log line at all, warnings included) in an app with no sample layers;
+// `None` is a true no-op (test: an_app_without_sample_layers_still_logs).
+fn sample_layers(
+    layers: Vec<Box<dyn Layer<Registry> + Send + Sync>>,
+) -> Option<Vec<Box<dyn Layer<Registry> + Send + Sync>>> {
+    (!layers.is_empty()).then_some(layers)
 }
 
 /// Resolves on Ctrl-C or SIGTERM.
@@ -142,7 +157,8 @@ async fn serve(config: Config) -> anyhow::Result<()> {
         }
         tracing::warn!("{problem}");
     }
-    let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
+    // APP_BIND: 127.0.0.1 in development (this machine only), 0.0.0.0 in production.
+    let addr = SocketAddr::new(config.bind, config.port);
     let state = app_state(config).await?;
     let service =
         routes::router(state.clone())?.into_make_service_with_connect_info::<SocketAddr>();
@@ -184,7 +200,7 @@ async fn serve(config: Config) -> anyhow::Result<()> {
                 })?;
             // Development only: the same router and state on plain HTTP beside the TLS port.
             if let Some(port) = state.config.dev_http_port {
-                let plain = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port)))
+                let plain = TcpListener::bind(SocketAddr::new(state.config.bind, port))
                     .await
                     .with_context(|| format!("binding APP_DEV_HTTP_PORT={port}"))?;
                 let (service, mut stopping) = (service.clone(), stopping.clone());
@@ -346,4 +362,20 @@ async fn introspect(config: Config) -> anyhow::Result<()> {
         kernel::introspect::snapshot(&state, controllers::dev::FRONTEND_MODE, false).await?;
     println!("{}", serde_json::to_string_pretty(&snapshot)?);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_app_without_sample_layers_still_logs() {
+        let subscriber = tracing_subscriber::registry()
+            .with(sample_layers(Vec::new()))
+            .with(tracing_subscriber::EnvFilter::new("info"));
+        tracing::subscriber::with_default(subscriber, || {
+            assert!(tracing::enabled!(tracing::Level::WARN));
+            assert!(!tracing::enabled!(tracing::Level::DEBUG));
+        });
+    }
 }

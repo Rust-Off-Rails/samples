@@ -5,10 +5,11 @@ use axum::http::{StatusCode, header};
 use chrono::{Duration, Utc};
 use offrails_host::{
     config::{AppEnv, Config, MagicLinkConfig},
+    controllers::login_links,
     kernel::mailer::Email,
     models::{
         auth_event::{self, Kind},
-        login_link, session, user,
+        auth_throttle, login_link, session, user,
     },
 };
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait, IntoActiveModel};
@@ -17,12 +18,12 @@ use crate::auth_core_test::{LogCapture, age_sessions};
 use crate::factories;
 use crate::support::{TestApp, TestResponse};
 
-async fn request_link(app: &TestApp, email: &str) -> TestResponse {
+pub async fn request_link(app: &TestApp, email: &str) -> TestResponse {
     app.post_form("/login_links", &[("email", email)]).await
 }
 
 /// Asks for a link and returns the email.
-async fn mail_for(app: &TestApp, email: &str) -> Email {
+pub async fn mail_for(app: &TestApp, email: &str) -> Email {
     request_link(app, email)
         .await
         .assert_redirect_to("/login_links/sent");
@@ -30,7 +31,7 @@ async fn mail_for(app: &TestApp, email: &str) -> Email {
     app.last_email_to(email).expect("a sign-in email")
 }
 
-fn code_in(mail: &Email) -> String {
+pub fn code_in(mail: &Email) -> String {
     mail.text
         .lines()
         .find_map(|l| l.strip_prefix("Your code: "))
@@ -39,7 +40,7 @@ fn code_in(mail: &Email) -> String {
         .to_owned()
 }
 
-fn signed_in(app: &TestApp) -> bool {
+pub fn signed_in(app: &TestApp) -> bool {
     app.cookie("session_token").is_some()
 }
 
@@ -267,6 +268,74 @@ async fn a_code_allows_five_wrong_guesses_then_burns_the_link() {
         .await
         .assert_status(StatusCode::NOT_FOUND);
     assert!(!signed_in(&app));
+}
+
+/// Burning a link takes 5 wrong codes; a new link must not bring 5 more. Wrong codes count per
+/// address in `auth_throttles`, across links, browsers and networks, with growing pauses.
+#[tokio::test]
+async fn code_guesses_are_throttled_per_address_across_links() {
+    let app = TestApp::new().await;
+    let first = mail_for(&app, "ada@example.com").await;
+    let code = code_in(&first);
+    let wrong = if code == "000000" { "111111" } else { "000000" };
+    for _ in 0..login_link::MAX_CODE_ATTEMPTS {
+        app.post_form("/login_links/code", &[("code", wrong)])
+            .await
+            .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    // A fresh link, then in another browser: even the right code waits now.
+    let second = mail_for(&app, "ada@example.com").await;
+    let res = app
+        .post_form("/login_links/code", &[("code", &code_in(&second))])
+        .await;
+    res.assert_status(StatusCode::TOO_MANY_REQUESTS)
+        .assert_text("Too many wrong codes for this address");
+    assert!(res.headers.contains_key(header::RETRY_AFTER));
+    app.clear_cookies();
+    let third = mail_for(&app, "ada@example.com").await;
+    app.post_form("/login_links/code", &[("code", &code_in(&third))])
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+    assert!(!signed_in(&app));
+    // Another address is not affected.
+    let bob = mail_for(&app, "bob@example.com").await;
+    app.post_form("/login_links/code", &[("code", &code_in(&bob))])
+        .await
+        .assert_redirect_to("/account");
+    // Once the pause is over (cleared here), the right code works and forgives the failures.
+    app.clear_cookies();
+    let key = login_links::code_throttle_key(&app.state, "ada@example.com");
+    auth_throttle::clear(app.db(), &key).await.unwrap();
+    let fourth = mail_for(&app, "ada@example.com").await;
+    app.post_form("/login_links/code", &[("code", &code_in(&fourth))])
+        .await
+        .assert_redirect_to("/account");
+}
+
+#[tokio::test]
+async fn link_requests_are_capped_per_address_per_day() {
+    let app = TestApp::new().await;
+    // A day of requests, spread over many 3-minute windows.
+    for _ in 0..login_links::DAILY_LIMIT {
+        app.state
+            .rate_limit
+            .check(
+                &login_links::daily_key("ada@example.com"),
+                login_links::DAILY_LIMIT,
+                std::time::Duration::from_secs(24 * 60 * 60),
+            )
+            .await
+            .unwrap();
+    }
+    request_link(&app, "ada@example.com")
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS)
+        .assert_text("Too many sign-in links requested");
+    app.settle().await;
+    assert!(app.last_email_to("ada@example.com").is_none());
+    request_link(&app, "bob@example.com")
+        .await
+        .assert_redirect_to("/login_links/sent");
 }
 
 #[tokio::test]
