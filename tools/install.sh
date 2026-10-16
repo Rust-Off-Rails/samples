@@ -12,7 +12,9 @@
 #   3. copies samples/<name>/files/ into the app at the same paths, with the host crate name
 #      (offrails_host) replaced by the app's;
 #   4. applies its wiring: each [[wire]] text goes on the lines above the `samples: <anchor>`
-#      comment in that file, indented like the comment (already-present lines are skipped);
+#      comment in that file, indented like the comment (already-present lines are skipped). A wire
+#      with `when = "<other>"` applies only when that sample is installed too: now, if it already
+#      is, or later, when installing <other> applies the optional wires that wait for it;
 #   5. records `YYYY-MM-DD: installed sample <name> <version>` in docs/decisions.md.
 #
 # The format is documented in samples/FORMAT.md. Exit status: 0 done, 1 refused or failed, 2 usage.
@@ -29,7 +31,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --force) force=1 ;;
     --dry-run) dry=1 ;;
-    -h | --help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h | --help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) usage ;;
     *) break ;;
   esac
@@ -78,6 +80,7 @@ parse() {
       if (section == "wire") {
         if (key == "file") file[n] = unquote(value($0))
         else if (key == "anchor") anchor[n] = unquote(value($0))
+        else if (key == "when") when[n] = unquote(value($0))
         else if (key == "text") {
           text_file = out "/wire." n
           printf "" > text_file
@@ -100,7 +103,7 @@ parse() {
       }
       if (key == "name" || key == "version") print key "\t" unquote(value($0)) > (out "/meta")
     }
-    END { for (i = 1; i <= n; i++) print file[i] "\t" anchor[i] "\t" i > (out "/wires") }
+    END { for (i = 1; i <= n; i++) print file[i] "\t" anchor[i] "\t" i "\t" when[i] > (out "/wires") }
   ' "$samples/$1/sample.toml"
   touch "$dir/deps" "$dir/crates" "$dir/wires" "$dir/meta"
 }
@@ -135,6 +138,30 @@ resolve() {
 }
 resolve "$target"
 
+# wanted <when>: does an optional wire waiting for <when> apply (installed, or installing now)?
+wanted() {
+  [ -z "$1" ] && return 0
+  installed "$1" && return 0
+  case " $order " in *" $1 "*) return 0 ;; esac
+  return 1
+}
+
+# Optional wires of samples already in the app that wait for one being installed now:
+# $work/later.<n> = "<sample>\t<file>\t<anchor>\t<wire n>", applied after this install.
+later=""
+if [ -f "$app/docs/decisions.md" ]; then
+  already=$(sed -n 's/^.*: installed sample \([^ ]*\) .*$/\1/p' "$app/docs/decisions.md" | sort -u)
+  for d in $already; do
+    case " $order " in *" $d "*) continue ;; esac
+    [ -f "$samples/$d/sample.toml" ] || continue
+    [ -d "$work/$d" ] || parse "$d"
+    while IFS="$(printf '\t')" read -r file anchor n when; do
+      [ -n "$when" ] || continue
+      case " $order " in *" $when "*) later="$later $d:$n" ;; esac
+    done < "$work/$d/wires"
+  done
+fi
+
 if installed "$target" && [ "$force" = 0 ]; then
   echo "install: $target is already installed in $app (docs/decisions.md); --force reinstalls" >&2
   exit 1
@@ -142,6 +169,28 @@ fi
 
 # A copy of <file> with the host crate name replaced by the app's.
 rename() { sed "s/offrails_host/$crate/g" "$1"; }
+
+# check_wire <sample> <file> <anchor>: the target exists (or this install creates it) and has the
+# anchor on a line of its own; counts a problem otherwise.
+check_wire() {
+  if [ ! -f "$app/$2" ]; then
+    # A file this same install creates is fine (a sample may wire into its own dependency).
+    found=0
+    for o in $order; do [ -f "$samples/$o/files/$2" ] && found=1; done
+    if [ "$found" = 0 ]; then
+      echo "refuse $1: wiring target $2 doesn't exist in the app" >&2
+      problems=$((problems + 1))
+    fi
+  elif ! grep -q "samples: $3\$" "$app/$2" && ! grep -q "samples: $3 " "$app/$2"; then
+    echo "refuse $1: $2 has no 'samples: $3' anchor; apply this wiring by hand (README.md, Wiring)" >&2
+    problems=$((problems + 1))
+  elif ! grep -E "samples: $3( |\$)" "$app/$2" | grep -qE '^[[:space:]]*(//|\{#|#|/\*)'; then
+    # WHY: an anchor trailing code (`} // samples: x`, as rustfmt may leave it) would put the
+    # insertion inside that code.
+    echo "refuse $1: the 'samples: $3' anchor in $2 shares its line with code; move it onto its own line" >&2
+    problems=$((problems + 1))
+  fi
+}
 
 # Check everything before changing anything.
 problems=0
@@ -156,26 +205,17 @@ for s in $order; do
       problems=$((problems + 1))
     fi
   done
-  while IFS="$(printf '\t')" read -r file anchor _n; do
+  while IFS="$(printf '\t')" read -r file anchor _n when; do
     [ -n "$file" ] || continue
-    if [ ! -f "$app/$file" ]; then
-      # A file this same install creates is fine (a sample may wire into its own dependency).
-      found=0
-      for o in $order; do [ -f "$samples/$o/files/$file" ] && found=1; done
-      if [ "$found" = 0 ]; then
-        echo "refuse $s: wiring target $file doesn't exist in the app" >&2
-        problems=$((problems + 1))
-      fi
-    elif ! grep -q "samples: $anchor\$" "$app/$file" && ! grep -q "samples: $anchor " "$app/$file"; then
-      echo "refuse $s: $file has no 'samples: $anchor' anchor; apply this wiring by hand (README.md, Wiring)" >&2
-      problems=$((problems + 1))
-    elif ! grep -E "samples: $anchor( |\$)" "$app/$file" | grep -qE '^[[:space:]]*(//|\{#|#|/\*)'; then
-      # WHY: an anchor trailing code (`} // samples: x`, as rustfmt may leave it) would put the
-      # insertion inside that code.
-      echo "refuse $s: the 'samples: $anchor' anchor in $file shares its line with code; move it onto its own line" >&2
-      problems=$((problems + 1))
-    fi
+    wanted "$when" || continue
+    check_wire "$s" "$file" "$anchor"
   done < "$work/$s/wires"
+done
+for w in $later; do
+  d=${w%%:*}
+  n=${w#*:}
+  line=$(awk -F '\t' -v n="$n" '$3 == n' "$work/$d/wires")
+  check_wire "$d" "$(printf '%s' "$line" | cut -f1)" "$(printf '%s' "$line" | cut -f2)"
 done
 [ "$problems" = 0 ] || { echo "install: nothing changed ($problems problem(s))" >&2; exit 1; }
 
@@ -199,6 +239,13 @@ insert_at() {
   ' "$1" "$1" > "$1.tmp" && mv "$1.tmp" "$1"
 }
 
+# apply_wire <sample> <file> <anchor> <wire n>
+apply_wire() {
+  sed "s/offrails_host/$crate/g" "$work/$1/wire.$4" > "$work/$1/wire.$4.renamed"
+  insert_at "$app/$2" "$3" "$work/$1/wire.$4.renamed"
+  echo "  wire $2 @ $3"
+}
+
 today=$(date -u +%F)
 for s in $order; do
   version=$(meta "$s" version)
@@ -206,7 +253,7 @@ for s in $order; do
   if [ "$dry" = 1 ]; then
     sed 's/^/  cargo add /' "$work/$s/crates"
     (cd "$samples/$s/files" 2>/dev/null && find . -type f | sed 's|^\./|  copy |' | sort) || true
-    awk -F '\t' '{ print "  wire " $1 " @ samples: " $2 }' "$work/$s/wires"
+    awk -F '\t' '{ print "  wire " $1 " @ samples: " $2 ($4 != "" ? " (when " $4 " is installed)" : "") }' "$work/$s/wires"
     continue
   fi
   while IFS= read -r line; do
@@ -223,14 +270,36 @@ for s in $order; do
       echo "  copy $f"
     done
   fi
-  while IFS="$(printf '\t')" read -r file anchor n; do
+  while IFS="$(printf '\t')" read -r file anchor n when; do
     [ -n "$file" ] || continue
-    sed "s/offrails_host/$crate/g" "$work/$s/wire.$n" > "$work/$s/wire.$n.renamed"
-    insert_at "$app/$file" "$anchor" "$work/$s/wire.$n.renamed"
-    echo "  wire $file @ $anchor"
+    if ! wanted "$when"; then
+      echo "  wait $file @ $anchor (applies when $when is installed)"
+      continue
+    fi
+    if [ -n "$when" ] && ! installed "$when"; then
+      # <when> comes later in this same install: wire after it.
+      later="$later $s:$n"
+      continue
+    fi
+    apply_wire "$s" "$file" "$anchor" "$n"
   done < "$work/$s/wires"
   mkdir -p "$app/docs"
   echo "$today: installed sample $s $version (tools/install.sh; procedure and checks: samples/$s/README.md, CHECKS.md)" >> "$app/docs/decisions.md"
+done
+
+# The optional wires of samples already installed that were waiting for one installed now.
+for w in $later; do
+  d=${w%%:*}
+  n=${w#*:}
+  line=$(awk -F '\t' -v n="$n" '$3 == n' "$work/$d/wires")
+  file=$(printf '%s' "$line" | cut -f1)
+  anchor=$(printf '%s' "$line" | cut -f2)
+  if [ "$dry" = 1 ]; then
+    echo "  wire $file @ samples: $anchor (for $d)"
+  else
+    echo "for $d:"
+    apply_wire "$d" "$file" "$anchor" "$n"
+  fi
 done
 
 [ "$dry" = 1 ] || cat <<EOF

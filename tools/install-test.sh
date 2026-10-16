@@ -1,10 +1,11 @@
 #!/bin/sh
-# Regression checks for tools/install.sh's dependency resolution, on fixture samples in a temporary
-# copy of the repo layout (no cargo, no real samples):
+# Regression checks for tools/install.sh's dependency resolution and optional wiring, on fixture
+# samples in a temporary copy of the repo layout (no cargo, no real samples):
 #   - a diamond (top -> base, top -> mid -> base) installs base once, before mid, before top;
 #   - the same diamond with base already installed is not a cycle (the false "dependency cycle"
 #     when a sample listed both mailer and dev-mailbox);
-#   - a real cycle is still refused.
+#   - a real cycle is still refused;
+#   - an optional wire (`when = "<sample>"`) waits until that sample is installed, in either order.
 # tools/ci.sh runs it first. Exit status: 0 when every check passed.
 set -eu
 
@@ -66,6 +67,39 @@ sample loop-a loop-b
 sample loop-b loop-a
 app
 check "a real cycle is still refused" "CYCLE " "$(order loop-a)"
+
+# Optional wiring: `opt` has a wire with `when = "dep"`, into src/x.rs of the app.
+sample dep
+sample opt
+cat >> "$tmp/samples/opt/sample.toml" <<'TOML'
+
+[[wire]]
+file = "src/x.rs"
+anchor = "x"
+when = "dep"
+text = '''
+// wired for dep
+'''
+TOML
+app_with_anchor() {
+  app
+  mkdir -p "$tmp/app/src"
+  printf '// samples: x\n' > "$tmp/app/src/x.rs"
+}
+install() { sh "$tmp/tools/install.sh" "$1" "$tmp/app" > /dev/null 2>&1 || echo "install $1 failed" >&2; }
+wired() { if grep -q "wired for dep" "$tmp/app/src/x.rs"; then echo yes; else echo no; fi; }
+
+app_with_anchor
+install opt
+check "an optional wire waits while its sample is missing" "no" "$(wired)"
+install dep
+check "installing the awaited sample applies the waiting wire" "yes" "$(wired)"
+
+app_with_anchor
+install dep
+install opt
+check "an optional wire applies when its sample is already in" "yes" "$(wired)"
+check "and only once" "1" "$(grep -c "wired for dep" "$tmp/app/src/x.rs")"
 
 [ "$failed" = 0 ] || { echo "install-test: $failed check(s) failed" >&2; exit 1; }
 echo "install-test: all checks passed"

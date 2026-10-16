@@ -42,7 +42,7 @@ tools/install.sh dev-mailbox path/to/app     # installs mailer first; refuses to
 host/                 the blank app (generators/new.md, htmx) every sample installs into and is tested in
 samples/<name>/       sample.toml, README.md, CHECKS.md, PROMPT.md, files/  (format: samples/FORMAT.md)
 tools/install.sh      install a sample (and its dependencies) into an app
-tools/install-test.sh regression checks for install.sh's dependency resolution (fixtures, no cargo)
+tools/install-test.sh regression checks for install.sh: dependency resolution, optional wiring (fixtures, no cargo)
 tools/ci.sh           prove samples: fresh host copy, install, fmt, clippy, tests on SQLite and Postgres, offrails-check, cargo deny, cargo audit
 tools/security-check.sh   every SECURITY marker and CHECKS.md row cites a test that exists
 tools/demo.sh         a running demo with every sample and seed data (demo/, git-ignored)
