@@ -47,7 +47,7 @@ Through the samples MCP server: `get_sample realtime`. Or by hand, in the app ro
    - `src/main.rs`, in `serve`: `state.hub.start().await?; let realtime_hub = state.hub.clone();` after the router is built, and `realtime_hub.close();` in the shutdown future, before the drain starts.
    - `migration/src/lib.rs`: the three `m20261016_0050…` migrations (`mod` lines and `Box::new(…)` entries).
    - `templates/shared/_nav.html`: a "Live room" link with `hx-boost="false"`; `templates/layouts/application.html`: a "Sockets" link in the development footer, `hx-boost="false"`.
-   - `tests/app/main.rs`: `mod realtime_test;`; `tests/app/factories.rs`: `create_guest` and `find_room`; `tests/app/security_test.rs`: `src/channels/mod.rs`, `src/controllers/live.rs` and `src/kernel/sockets_web.rs` in the route sources; `tests/app/kernel_web_test.rs`: the three `/dev/sockets` paths in the no-store list.
+   - `tests/app/main.rs`: `mod realtime_test;`; `tests/app/factories.rs`: `create_guest` and `find_room`; `tests/app/security_test.rs`: `src/channels/mod.rs`, `src/controllers/live.rs` and `src/kernel/sockets_web.rs` in the route sources; `tests/app/kernel_web_test.rs`: the three `/dev/sockets` paths in the no-store list; `tests/app/theme_switch_test.rs`: `"/dev/sockets"` in `KERNEL_PAGES`.
    - `.env.example`: the six `APP_REALTIME_*`, `APP_CLUSTER` and `APP_NODE` lines.
 4. `cargo fmt --all && cargo run -- routes` (rewrites `docs/routes.md`), `bin/tailwindcss -i assets/app.css -o static/app.css`, then the Definition of Done.
 

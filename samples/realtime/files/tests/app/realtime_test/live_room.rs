@@ -287,3 +287,33 @@ async fn links_into_the_live_room_and_dev_sockets_are_not_boosted() {
         );
     }
 }
+
+/// The room, the guest sign-in and /dev/sockets follow the kernel header's theme switch: the
+/// server renders `data-theme` from the `offrails_theme` cookie, and no stylesheet of this sample
+/// has a `prefers-color-scheme` color block (samples/FORMAT.md#theming).
+#[tokio::test]
+async fn the_live_room_and_dev_sockets_follow_the_theme_switch() {
+    let app = TestApp::with_config(development()).await;
+    for theme in ["light", "dark"] {
+        let tag = format!(r#"<html lang="en" data-theme="{theme}">"#);
+        app.clear_cookies();
+        app.set_cookie("offrails_theme", theme);
+        app.get("/dev/guests/sign-in")
+            .await
+            .assert_ok()
+            .assert_contains(&tag);
+        app.get("/dev/sockets")
+            .await
+            .assert_ok()
+            .assert_contains(&tag)
+            .assert_contains("data-theme-switch");
+        let ann = guest(&app.state, &format!("Ann {theme}")).await;
+        app.set_cookie("session_token", &ann.token);
+        app.get("/live/lobby").await.assert_ok().assert_contains(&tag);
+    }
+    let css = std::fs::read_to_string("static/kernel/sockets.css").unwrap();
+    assert!(
+        !css.contains("@media (prefers-color-scheme"),
+        "a color-scheme media query ignores the switch: use the kernel's light-dark() tokens"
+    );
+}

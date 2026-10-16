@@ -54,6 +54,7 @@ A realtime connection is authenticated once and then lives for hours, through lo
 | An idle connection's task stays small (10,000 sockets) | `an_idle_connection_future_stays_small` |
 | Links into the live room and `/dev/sockets` aren't boosted (their scripts and styles load in `<head>`) | `links_into_the_live_room_and_dev_sockets_are_not_boosted` |
 | `/dev/sockets` shows connections, topics, presence and frames | `dev_sockets_shows_connections_topics_presence_and_frames` |
+| The live room, the guest sign-in and `/dev/sockets` follow the kernel theme switch (`data-theme` from the cookie); `sockets.css` uses the kernel's `light-dark()` tokens, no `prefers-color-scheme` block | `the_live_room_and_dev_sockets_follow_the_theme_switch`, `every_kernel_page_renders_data_theme` |
 
 ## In a browser (not part of the test suite)
 

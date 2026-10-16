@@ -453,6 +453,13 @@ text = '''
 '''
 
 [[wire]]
+file = "tests/app/theme_switch_test.rs"
+anchor = "kernel pages"
+text = '''
+"/dev/sockets",
+'''
+
+[[wire]]
 file = "tests/app/kernel_web_test.rs"
 anchor = "no-store paths"
 text = '''

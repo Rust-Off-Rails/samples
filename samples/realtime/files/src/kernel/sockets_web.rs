@@ -13,6 +13,7 @@ use serde::Deserialize;
 
 use crate::kernel::flash::RequestFlash;
 use crate::kernel::hub::{ConnSnapshot, Snapshot};
+use crate::kernel::theme::ThemeSwitch;
 use crate::kernel::ui::{self, Chrome};
 use crate::state::AppState;
 
@@ -87,6 +88,7 @@ async fn index(
     State(state): State<AppState>,
     Query(q): Query<SocketsQuery>,
     flash: Option<Extension<RequestFlash>>,
+    theme: ThemeSwitch,
 ) -> Response {
     let chrome = Chrome::new(
         "Sockets",
@@ -94,6 +96,7 @@ async fn index(
         state.assets.assets(),
         true,
         flash.and_then(|f| f.0.0),
+        theme,
     )
     .stylesheet(state.assets.path("kernel/sockets.css"));
     ui::page(SocketsIndex {
