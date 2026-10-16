@@ -262,4 +262,12 @@ pub fn sent_emails(&self) -> Vec<offrails_host::kernel::mailer::Email> {
     self.state.mailer.sent()
 }
 
+/// The newest email sent to `to` (case-insensitive), for assertions on one recipient's mail.
+pub fn last_email_to(&self, to: &str) -> Option<offrails_host::kernel::mailer::Email> {
+    self.sent_emails()
+        .into_iter()
+        .rev()
+        .find(|e| e.to.eq_ignore_ascii_case(to.trim()))
+}
+
 '''

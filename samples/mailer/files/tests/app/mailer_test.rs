@@ -111,6 +111,8 @@ async fn the_test_environment_captures_mail_in_memory() {
     let sent = app.sent_emails();
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].to, "ada@example.com");
+    assert_eq!(app.last_email_to("ADA@example.com").unwrap().subject, "Hi");
+    assert!(app.last_email_to("grace@example.com").is_none());
 }
 
 #[tokio::test]

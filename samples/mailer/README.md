@@ -29,7 +29,7 @@ Through the samples MCP server: `get_sample mailer`. Or by hand, in the app root
    - `src/tasks/mod.rs`: `pub mod send_test_email;` and the `"send_test_email" => send_test_email::run(state, args).await,` arm.
    - `src/controllers/dev.rs`: the `SMTP_URL` / `MAILER` / `MAIL_FROM` facts on `/dev/system`.
    - `.env.example`: `SMTP_URL`, `MAILER`, `MAIL_FROM` (commented); `compose.yaml`: `SMTP_URL: ${SMTP_URL:-}`.
-   - `tests/app/main.rs`: `mod mailer_test;`; `tests/app/support.rs`: the `sent_emails()` helper on `TestApp`.
+   - `tests/app/main.rs`: `mod mailer_test;`; `tests/app/support.rs`: the `sent_emails()` and `last_email_to(address)` helpers on `TestApp`.
 4. `cargo fmt --all && cargo run -- db migrate`, then the Definition of Done (`.offrails/workflow.md`).
 
 `tools/install.sh mailer <app>` does steps 1 to 3 mechanically (it needs the anchors; it refuses and names any it can't find).
