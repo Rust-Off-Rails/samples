@@ -202,3 +202,11 @@ anchor = "test mods"
 text = '''
 mod auth_magic_link_test;
 '''
+
+[[wire]]
+file = "tests/app/main.rs"
+anchor = "test mods"
+when = "auth-password"
+text = '''
+mod auth_magic_link_password_test;
+'''

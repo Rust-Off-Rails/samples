@@ -33,6 +33,7 @@ use crate::{
     models::{
         Errors,
         auth_event::{self, Kind},
+        auth_throttle,
         login_link::{self, CodeCheck, Purpose},
         user,
     },
@@ -52,6 +53,19 @@ const BROWSER_COOKIE_SECS: i64 = 20 * 60;
 // APP: request limits: 10 per 3 minutes per network and per address (each sends an email).
 const LIMIT: u32 = 10;
 const WINDOW: StdDuration = StdDuration::from_secs(3 * 60);
+// APP: links per address per day. Each one emails the address, and each one's code can be guessed.
+pub const DAILY_LIMIT: u32 = 20;
+const DAY: StdDuration = StdDuration::from_secs(24 * 60 * 60);
+
+/// The rate-limit key of the daily cap for an address.
+pub fn daily_key(email: &str) -> String {
+    format!("login_links#day:{email}")
+}
+
+/// The `auth_throttles` key for wrong codes sent to `email`, whichever link they were for.
+pub fn code_throttle_key(s: &AppState, email: &str) -> String {
+    auth::throttle_key(s, "magic_code", email)
+}
 
 #[derive(Debug, Default, Deserialize)]
 pub struct LinkParams {
@@ -94,6 +108,12 @@ pub async fn create(
         .is_err()
         || s.rate_limit
             .check(&format!("login_links#create:{email}"), LIMIT, WINDOW)
+            .await
+            .is_err()
+        // SECURITY: a daily cap per address bounds the mail flood and the links (each with its
+        // code) a day of requests buys (test: link_requests_are_capped_per_address_per_day)
+        || s.rate_limit
+            .check(&daily_key(&email), DAILY_LIMIT, DAY)
             .await
             .is_err()
     {
@@ -228,17 +248,26 @@ pub async fn code(
         );
     }
     let now = Utc::now();
-    let link = match login_link::check_code(
-        &s.db,
-        &s.config.auth.secret_key,
-        Purpose::SignIn,
-        &browser,
-        &params.code,
-        now,
-    )
-    .await?
+    let Some(target) =
+        login_link::newest_for_browser(&s.db, Purpose::SignIn, &browser, now).await?
+    else {
+        return code_expired(ctx);
+    };
+    // SECURITY: wrong codes count per address across every link, in the database, with growing
+    // pauses: a new link (or another browser, another network) doesn't buy new guesses
+    // (test: code_guesses_are_throttled_per_address_across_links)
+    let attempt =
+        match auth_throttle::begin(&s.db, &code_throttle_key(&s, &target.email), now).await? {
+            Ok(attempt) => attempt,
+            Err(paused) => return code_paused(ctx, paused, now),
+        };
+    let link = match login_link::check_code(&s.db, &s.config.auth.secret_key, target, &params.code)
+        .await?
     {
-        CodeCheck::Valid(link) => link,
+        CodeCheck::Valid(link) => {
+            auth_throttle::succeeded(&s.db, attempt).await?;
+            link
+        }
         CodeCheck::Wrong { left } => {
             auth_event::record(&s.db, None, Kind::SignInFailed, &meta.meta, now).await?;
             let message = if left == 1 {
@@ -248,17 +277,37 @@ pub async fn code(
             };
             return check_email_page(ctx, StatusCode::UNPROCESSABLE_ENTITY, Some(message));
         }
-        CodeCheck::NoLink => {
-            return check_email_page(
-                ctx,
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Some(
-                    "That code has expired or was used up. Ask for a new sign-in link.".to_owned(),
-                ),
-            );
-        }
+        CodeCheck::NoLink => return code_expired(ctx),
     };
     finish(&s, ctx, &meta, &headers, link, "magic_link_code").await
+}
+
+fn code_expired(ctx: Ctx) -> Result<Response, AppError> {
+    check_email_page(
+        ctx,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        Some("That code has expired or was used up. Ask for a new sign-in link.".to_owned()),
+    )
+}
+
+/// Too many wrong codes for this address lately: a 429 that says when to come back.
+fn code_paused(
+    ctx: Ctx,
+    paused: auth_throttle::Paused,
+    now: chrono::DateTime<Utc>,
+) -> Result<Response, AppError> {
+    let mut response = check_email_page(
+        ctx,
+        StatusCode::TOO_MANY_REQUESTS,
+        Some(format!(
+            "Too many wrong codes for this address. Try again in {}, or click the link in the email.",
+            paused.wait_text(now)
+        )),
+    )?;
+    if let Ok(v) = HeaderValue::from_str(&(paused.until - now).num_seconds().max(1).to_string()) {
+        response.headers_mut().insert(header::RETRY_AFTER, v);
+    }
+    Ok(response)
 }
 
 /// `GET /login_links/{token}`: the page behind the emailed link. Never signs in.
@@ -329,9 +378,15 @@ async fn finish(
     if existing.is_none() {
         auth_event::record(&txn, Some(u.id), Kind::SignedUp, &meta.meta, now).await?;
     }
-    // Reading the email proves the address.
-    user::mark_verified(&txn, u.id, now).await?;
+    // Reading the email proves the address. An account someone registered for it without that
+    // proof (a password sign-up never verified) is the reader's now, minus whatever was set on it.
+    // SECURITY: account pre-hijacking: the attacker's password dies here
+    // (test: a_password_set_before_verification_dies_when_the_owner_signs_in_by_link)
+    let claimed = auth::claim_unverified_account(&txn, u.id, now).await?;
     txn.commit().await?;
+    if claimed && existing.is_some() {
+        auth::sessions_ended(s, u.id);
+    }
     let u = user::find_self(&s.db, u.id).await?;
     let mut response = auth::sign_in(s, headers, meta, u, method).await?;
     let secure = s.config.is_production();
@@ -467,19 +522,48 @@ pub async fn confirm_reauth_code(
     let browser =
         auth_cookie::read(&headers, &auth_cookie::name(BROWSER_COOKIE, secure)).unwrap_or_default();
     let now = Utc::now();
-    let outcome = login_link::check_code(
+    let Some(target) =
+        login_link::newest_for_browser(&s.db, Purpose::Reauth, &browser, now).await?
+    else {
+        let (status, errors) = wrong("has expired; ask for a new one".to_owned());
+        return account::confirm_error(&s, ctx, &current, "magic_link", status, None, errors).await;
+    };
+    // SECURITY: re-auth codes share the address's wrong-code throttle with sign-in codes
+    // (test: code_guesses_are_throttled_per_address_across_links)
+    let attempt = match auth_throttle::begin(
         &s.db,
-        &s.config.auth.secret_key,
-        Purpose::Reauth,
-        &browser,
-        &params.code,
+        &code_throttle_key(&s, &current.user.email),
         now,
     )
-    .await?;
+    .await?
+    {
+        Ok(attempt) => attempt,
+        Err(paused) => {
+            let (_, errors) = wrong(format!(
+                "can't be checked right now: too many wrong codes. Try again in {}",
+                paused.wait_text(now)
+            ));
+            return account::confirm_error(
+                &s,
+                ctx,
+                &current,
+                "magic_link",
+                StatusCode::TOO_MANY_REQUESTS,
+                None,
+                errors,
+            )
+            .await;
+        }
+    };
+    let outcome =
+        login_link::check_code(&s.db, &s.config.auth.secret_key, target, &params.code).await?;
     let link = match outcome {
         // SECURITY: the code must have been sent to this person's address
         // (test: a_reauth_code_only_confirms_its_own_account)
-        CodeCheck::Valid(link) if link.email == current.user.email => link,
+        CodeCheck::Valid(link) if link.email == current.user.email => {
+            auth_throttle::succeeded(&s.db, attempt).await?;
+            link
+        }
         CodeCheck::Wrong { left } => {
             auth_event::record(
                 &s.db,

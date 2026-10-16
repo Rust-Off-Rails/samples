@@ -5,7 +5,9 @@
 //!
 //! - The link's token is 256 random bits; only its SHA-256 is stored.
 //! - The code is 6 digits; only its HMAC (keyed by `APP_SECRET_KEY`) is stored, and a link allows
-//!   `MAX_CODE_ATTEMPTS` wrong codes before it's burned.
+//!   `MAX_CODE_ATTEMPTS` wrong codes before it's burned. Wrong codes also count per address,
+//!   across every link, in `auth_throttles` (the controller), so asking for new links doesn't
+//!   buy new guesses.
 //! - Every link remembers the browser that asked for it (a random cookie, stored as a digest).
 //!   The code is only accepted in that browser; by default the link is too (`same_browser`).
 //! - Using a link or code deletes the row in the same transaction that starts the session: the
@@ -154,28 +156,33 @@ pub enum CodeCheck {
     NoLink,
 }
 
-/// Checks a typed code against the newest link this browser asked for.
+/// The newest usable link this browser asked for (by its cookie), without counting anything:
+/// the code form checks the address's throttle with it before `check_code`.
+pub async fn newest_for_browser(
+    db: &impl ConnectionTrait,
+    purpose: Purpose,
+    browser_cookie: &str,
+    now: DateTime<Utc>,
+) -> Result<Option<Model>, AppError> {
+    Ok(Entity::find()
+        .filter(Column::BrowserDigest.eq(auth_token::digest(browser_cookie)))
+        .filter(Column::Purpose.eq(purpose))
+        .filter(Column::ExpiresAt.gt(now))
+        .order_by_desc(Column::Id)
+        .one(db)
+        .await?)
+}
+
+/// Checks a typed code against `link` (from `newest_for_browser`).
 // SECURITY: an attempt is counted (atomically) **before** comparing, so parallel guesses can't
 // exceed MAX_CODE_ATTEMPTS; the comparison is constant-time on keyed digests.
 // INVARIANT: a link allows at most 5 wrong codes (test: a_code_allows_five_wrong_guesses_then_burns_the_link)
 pub async fn check_code(
     db: &impl ConnectionTrait,
     key: &[u8],
-    purpose: Purpose,
-    browser_cookie: &str,
+    link: Model,
     code: &str,
-    now: DateTime<Utc>,
 ) -> Result<CodeCheck, AppError> {
-    let Some(link) = Entity::find()
-        .filter(Column::BrowserDigest.eq(auth_token::digest(browser_cookie)))
-        .filter(Column::Purpose.eq(purpose))
-        .filter(Column::ExpiresAt.gt(now))
-        .order_by_desc(Column::Id)
-        .one(db)
-        .await?
-    else {
-        return Ok(CodeCheck::NoLink);
-    };
     let counted = Entity::update_many()
         .col_expr(Column::CodeAttempts, Expr::col(Column::CodeAttempts).add(1))
         .filter(Column::Id.eq(link.id))
