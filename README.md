@@ -60,6 +60,8 @@ tools/security-check.sh
 tools/demo.sh && open http://localhost:3900/dev/mailbox                              # tools/demo.sh stop
 ```
 
+`host/` in development listens on 127.0.0.1 only and answers only local `Host` names (DNS rebinding can't reach `/dev`); `APP_BIND=0.0.0.0` opens it to a container's network and `APP_ALLOWED_HOSTS` adds a tunnel or LAN name. An unset `APP_ENV` means development and says so loudly at boot.
+
 CI (`.github/workflows/ci.yml`) runs the same, plus gitleaks over the whole history and an OWASP ZAP baseline against the demo with every sample installed.
 
 ## Versions

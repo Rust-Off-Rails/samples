@@ -26,7 +26,7 @@ use tower_http::{
 use crate::{
     controllers::{dev, errors, health, home, meta, migrations, theme},
     error::{self, AppError},
-    kernel::{assets, flash, redact, security},
+    kernel::{assets, flash, hosts, redact, security},
     state::AppState,
 };
 
@@ -110,6 +110,11 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
             Duration::from_secs(30),
         ))
         .layer(map_response(error::retry_after))
+        // Development only: a Host that isn't this machine is refused (DNS rebinding).
+        .layer(from_fn_with_state(
+            hosts::AllowedHosts::new(&config),
+            hosts::middleware,
+        ))
         // Outside the panic and timeout layers, so a 500 or 503 carries the headers too.
         .layer(from_fn_with_state(
             security::Hardening::new(&config),
