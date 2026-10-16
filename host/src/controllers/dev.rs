@@ -94,9 +94,9 @@ async fn index(
             },
         },
     ];
-    #[allow(unused_mut)] // samples add their buttons below
-    let mut try_it: Vec<TryIt> = Vec::new();
-    // samples: dev try-it
+    let try_it: Vec<TryIt> = vec![
+        // samples: dev try-it
+    ];
     Ok(ui::page(DevIndex {
         chrome: chrome(&state, "dev", "Dev tools", flash),
         tiles,

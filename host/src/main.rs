@@ -73,11 +73,12 @@ async fn main() -> anyhow::Result<()> {
         Command::Db { command } => db_command(config, command).await,
         Command::Routes => print_routes(),
         Command::Health => health(&config).await,
-        Command::Introspect => introspect(config).await,
         Command::Task { name, args } => {
             let state = app_state(config).await?;
             tasks::run(&state, &name, args).await
-        } // samples: cli dispatch
+        }
+        Command::Introspect => introspect(config).await,
+        // samples: cli dispatch
     }
 }
 

@@ -1,0 +1,81 @@
+name: CI
+on:
+  push: { branches: [main] }
+  pull_request:
+
+concurrency: { group: "ci-${{ github.ref }}", cancel-in-progress: true }
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: shellcheck (POSIX sh tools)
+        run: shellcheck tools/*.sh
+      - name: Every SECURITY marker and CHECKS.md row cites a test that exists
+        run: tools/security-check.sh
+
+  samples:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env: { POSTGRES_PASSWORD: postgres }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: "rustfmt, clippy" }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: "host -> ../.cache/target" }
+      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@cargo-deny
+      - uses: taiki-e/install-action@cargo-audit
+      - name: Vendor the framework release (checksum-verified)
+        run: tools/vendor-framework.sh host
+      - name: The host alone (the baseline every sample starts from)
+        working-directory: host
+        run: |
+          bin/setup-tailwind && bin/tailwindcss -i assets/app.css -o static/app.css --minify
+          sh .offrails/tools/offrails-check
+          cargo fmt --all --check
+          cargo clippy --all-targets --locked -- -D warnings
+          cargo nextest run --locked
+      - name: Every sample alone, then all together (SQLite and Postgres; clippy, cargo deny, cargo audit)
+        run: tools/ci.sh
+
+  zap:                          # OWASP ZAP baseline against the demo with every sample installed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: "host -> ../.cache/target" }
+      - run: tools/vendor-framework.sh host
+      - name: Start the demo (all samples, seeded)
+        run: tools/demo.sh all --port 3900
+      - name: ZAP baseline (fails on any WARN not triaged in .zap/rules.tsv)
+        run: |
+          chmod 777 .zap
+          docker run --rm --network host -v "$PWD/.zap:/zap/wrk:rw" ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py -t http://localhost:3900 -c rules.tsv -r zap-report.html -m 2
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with: { name: zap-report, path: .zap/zap-report.html, if-no-files-found: ignore }
+      - if: always()
+        run: tools/demo.sh stop
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }
+      - name: gitleaks (secrets in any commit)
+        run: docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1 git /repo --redact --no-banner
