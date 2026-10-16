@@ -639,12 +639,13 @@ pub fn job_view(
         class: "neutral",
         note: String::new(),
     }];
-    if (j.scheduled_at - j.inserted_at).num_seconds() > 1 {
+    // A job scheduled ahead at insert: when it was (or is) due.
+    if j.attempt == 0 && (j.scheduled_at - j.inserted_at).num_seconds() > 1 {
         timeline.push(Step {
             label: if j.scheduled_at > now {
                 "Runs".into()
             } else {
-                "Scheduled for".into()
+                "Was due".into()
             },
             at: ui::utc(j.scheduled_at),
             ago: if j.scheduled_at > now {
@@ -693,6 +694,23 @@ pub fn job_view(
         JobState::Cancelled => j.cancelled_at.map(|t| ("Cancelled", t, "cancelled")),
         _ => None,
     };
+    // Waiting again after a failure or a snooze: the next run closes the timeline.
+    if j.attempt > 0
+        && matches!(j.state, JobState::Retryable | JobState::Scheduled)
+        && j.scheduled_at > now
+    {
+        timeline.push(Step {
+            label: if j.state == JobState::Retryable {
+                "Retries".into()
+            } else {
+                "Runs again".into()
+            },
+            at: ui::utc(j.scheduled_at),
+            ago: ui::until(j.scheduled_at, now),
+            class: "scheduled",
+            note: String::new(),
+        });
+    }
     if let Some((label, at, class)) = final_step {
         timeline.push(Step {
             label: label.into(),
@@ -703,10 +721,11 @@ pub fn job_view(
         });
     }
 
-    let queue_time = j
-        .attempted_at
-        .map(|a| ui::duration((a - j.scheduled_at).num_milliseconds().max(0)))
-        .unwrap_or_else(|| "–".into());
+    // WHY: after a retry, scheduled_at is the *next* run, so the last wait isn't knowable.
+    let queue_time = match j.attempted_at {
+        Some(a) if a >= j.scheduled_at => ui::duration((a - j.scheduled_at).num_milliseconds()),
+        _ => "–".into(),
+    };
     let run_time = match (j.attempted_at, j.finished_at()) {
         (Some(a), Some(f)) if j.state == JobState::Completed => {
             ui::duration((f - a).num_milliseconds().max(0))
@@ -775,7 +794,9 @@ pub fn job_view(
             });
         }
     }
-    let cli = if admin::can_retry(j.state) {
+    let cli = if admin::can_run_now(j.state) {
+        format!("app jobs run {}", j.id)
+    } else if admin::can_retry(j.state) {
         format!("app jobs retry {}", j.id)
     } else {
         format!("app jobs show {}", j.id)

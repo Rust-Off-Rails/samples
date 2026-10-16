@@ -387,12 +387,13 @@ async fn the_job_page_shows_args_errors_per_attempt_and_timeline() {
         .assert_text("Full report (causes and backtrace)")
         .assert_text("Attempt 1 failed")
         .assert_text("Inserted")
+        .assert_text("Retries")
         .assert_contains(&format!("action=\"/admin/jobs/{failed}/run\""))
         .assert_contains(&format!("action=\"/admin/jobs/{failed}/cancel\""))
         .assert_not_contains(
             &format!("action=\"/admin/jobs/{failed}/delete\"").replace("delete", "retry"),
         )
-        .assert_text(&format!("app jobs retry {failed}"))
+        .assert_text(&format!("app jobs run {failed}"))
         .assert_contains("href=\"/admin/jobs/list?tag=user%3A7\"");
     // A completed job offers retry and delete, nothing else.
     let done = admin::list(
