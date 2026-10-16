@@ -7,8 +7,9 @@ A sample is tested reference code an agent copies into a Rust off Rails app. Onc
 ```
 samples/<name>/
   sample.toml     what to add (crates), where to wire it (anchors), what it depends on
-  README.md       what it is, the install procedure for an agent, wiring, customizing, screenshots
+  README.md       what it is, the install procedure for an agent, wiring, adapting, screenshots
   CHECKS.md       what "working and safe" means: threat model, invariants, and the test for each
+  PROMPT.md       a ready-to-paste prompt that installs and proves it
   files/          the code, at the app paths it lands on (src/, templates/, static/, migration/, tests/)
 ```
 
@@ -105,6 +106,23 @@ The anchors `host/` provides (each file says what goes there):
 
 An app made by `generators/new.md` before 0.7.0 has no anchors. Then `install.sh` refuses and names each missing anchor; the agent applies that wiring by hand at the spot the anchor table describes (README "Wiring" says it in words for every insertion).
 
+## Comments that guide the next model
+
+Samples are read and adapted by models of every size. These markers tell a model what it may change, what it must keep, and why. A weak model that changes **only** `// APP:` lines still gets a correct app.
+
+| Marker | Means | Example |
+|--------|-------|---------|
+| `// APP: …` | This line or block is meant to be customized, and how (names, copy, limits, routes) | `const KEEP: u64 = 500; // APP: how many messages development keeps` |
+| `// WHY: …` | A non-obvious choice, in one line, so nobody "simplifies" it away | `// WHY: BEGIN IMMEDIATE, or a read-then-write transaction fails with "database is locked"` |
+| `// INVARIANT: … (test: <test_name>)` | Must stay true; the named test guards it | `// INVARIANT: development always delivers to the mailbox (test: development_always_uses_the_dev_mailbox)` |
+| `// SECURITY: …` | A security-relevant line: the attack it prevents and what breaks if it goes | `// SECURITY: no allow-scripts and no allow-same-origin: mail can't run code or read this page` |
+| `// GUIDE: .offrails/guides/<guide>.md#<anchor>` | The framework section this code implements (the app's vendored copy) | `// GUIDE: .offrails/guides/mailers.md#the-dev-mailbox` |
+
+- In templates use `{# APP: … #}` (Askama), in CSS `/* APP: … */`, in shell and TOML `# APP: …`.
+- Dense where it matters, absent where the code is obvious. Never narrate what the next line does.
+- Every `// SECURITY:` marker names behavior a test proves; every `(test: name)` names a test that exists. `tools/security-check.sh` fails on a dangling one.
+- READMEs link guides by their public URL too: `https://rustoffrails.org/docs/<guide>` (e.g. `https://rustoffrails.org/docs/mailers`).
+
 ## README.md
 
 Sections, in this order:
@@ -113,15 +131,20 @@ Sections, in this order:
 2. **Screenshots**: the light desktop screenshot inline, links to the rest (`docs/screenshots/<sample>/`).
 3. **Install**: `get_sample` through the MCP server, or by hand: the exact numbered procedure (crates, copy `files/`, each wiring step in words with its file, then `cargo fmt`, `cargo run -- routes`, the Definition of Done). `tools/install.sh <sample> <app>` is the mechanical version.
 4. **After installing**: what the agent must still do in the app (env vars in the deploy config, `docs/decisions.md`, the `AGENTS.md` header line).
-5. **Customize**: what to rename or change, and what not to.
-6. **How it works**: the design in a few paragraphs, with the routes table.
-7. **Files**: one line per file.
+5. **Adapting it**: 3 to 6 common variations as short recipes (e.g. "add an SMTP provider", "show the mailbox in production behind admin access"), each naming the `// APP:` lines it touches.
+6. **Do not change**: the invariants, each with the test that guards it.
+7. **How it works**: the design in a few paragraphs, with the routes table and the guide links (`.offrails/guides/…` and `https://rustoffrails.org/docs/…`).
+8. **Files**: one line per file.
+
+## PROMPT.md
+
+A ready-to-paste prompt for an agent working in an app: "Install the `<sample>` sample into this app, following its README.md …", what to adapt and what to leave alone, and it ends with the exact commands that prove it works (the Definition of Done plus the sample's own checks).
 
 ## CHECKS.md
 
 What "working and safe" means, each item with the test (or command) that proves it:
 
-- **Threat model**: a STRIDE table (`| STRIDE | Threat | Control | Test |`) for anything reachable over HTTP; `n/a: <why>` where a category can't apply.
+- **Threat model**: a STRIDE table (`| STRIDE | Threat | Control | Test |`) for anything reachable over HTTP; `n/a: <why>` where a category can't apply. The Test cell names tests in backticks (`` `test_name` ``); `tools/security-check.sh` fails when one doesn't exist.
 - **Invariants**: behavior that must hold (e.g. "development always delivers to the dev mailbox").
 - **Commands**: how to run them (`tools/ci.sh <sample>`).
 
@@ -132,7 +155,7 @@ TEST_DATABASE_URL=postgres://… tools/ci.sh <sample>   # alone
 TEST_DATABASE_URL=postgres://… tools/ci.sh all        # together with every other sample
 ```
 
-`ci.sh` copies `host/` to `.cache/ci/<name>/app`, installs with `install.sh`, then runs `cargo fmt` (and fails when a shipped file changes: ship formatted code), builds the CSS, regenerates `docs/routes.md`, `clippy -D warnings`, the test suite on SQLite and on Postgres, `offrails-check`, `cargo deny` and `fmt --check`.
+`ci.sh` copies `host/` to `.cache/ci/<name>/app`, installs with `install.sh`, then runs `cargo fmt` (and fails when a shipped file changes: ship formatted code), builds the CSS, regenerates `docs/routes.md`, `clippy -D warnings` (plus the framework's `unwrap_used`/`expect_used` gate on non-test code), the test suite on SQLite and on Postgres, `offrails-check`, `cargo deny`, `cargo audit` and `fmt --check`. Repo-wide security gates (`tools/security-check.sh`, gitleaks over the history, the ZAP baseline against the demo with every sample) run in `.github/workflows/ci.yml`. Never weaken a gate to get green.
 
 ## host/ is frozen
 
