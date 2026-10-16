@@ -18,6 +18,7 @@ use crate::kernel::flash::Flash;
 use crate::models::guest::{self, GuestParams};
 use crate::models::room::{self, HeadlineParams};
 use crate::models::{Errors, guest_session, room_message};
+use crate::routes::paths;
 use crate::state::AppState;
 use crate::views::live::{LiveHeader, LiveShow, LiveSignIn, MessageView, RoomLink};
 use crate::views::{Ctx, render};
@@ -41,9 +42,10 @@ pub fn dev_router() -> Router<AppState> {
         .route("/dev/guests/sign-out", post(sign_out))
 }
 
-/// Not signed in: development has guests; elsewhere it's the app's sign-in (401 → redirect).
+/// Not signed in: development has guests (unless accounts replaced them); elsewhere it's the
+/// app's sign-in (401 → redirect).
 fn sign_in_first(s: &AppState) -> Result<Response, AppError> {
-    if s.config.is_development() {
+    if s.config.is_development() && identity::DEV_GUESTS {
         Ok(Redirect::to("/dev/guests/sign-in").into_response())
     } else {
         Err(AppError::Unauthorized)
@@ -104,7 +106,7 @@ pub async fn show(
         live_room_js: s.assets.path("live_room.js"),
         template_message: MessageView::blank(),
         palette: (0..8).collect(),
-        dev_guest: s.config.is_development(),
+        dev_guest: s.config.is_development() && identity::DEV_GUESTS,
         errors: Errors::default(),
         room,
     };
@@ -178,11 +180,19 @@ pub async fn update_headline(
 
 // ---- development guests ---------------------------------------------------------------------
 
+/// With accounts (identity.rs), guests don't exist: the guest pages send people to sign in.
+fn no_guests() -> Response {
+    Redirect::to(&paths::new_session()).into_response()
+}
+
 /// `GET /dev/guests/sign-in` (development).
 pub async fn sign_in_form(
     ctx: Ctx,
     CurrentPerson(signed): CurrentPerson,
 ) -> Result<Response, AppError> {
+    if !identity::DEV_GUESTS {
+        return Ok(no_guests());
+    }
     if signed.is_some() {
         return Ok(Redirect::to("/live/lobby").into_response());
     }
@@ -201,6 +211,9 @@ pub async fn sign_in(
     ctx: Ctx,
     Form(params): Form<GuestParams>,
 ) -> Result<Response, AppError> {
+    if !identity::DEV_GUESTS {
+        return Ok(no_guests());
+    }
     let new = match params.validate() {
         Ok(new) => new,
         Err(errors) => {
@@ -237,6 +250,11 @@ pub async fn sign_out(
     State(s): State<AppState>,
     RequirePerson(signed): RequirePerson,
 ) -> Result<Response, AppError> {
+    // SECURITY: with accounts the session id is auth-core's; never delete a guest row by it
+    // (test: with_accounts_the_guest_pages_send_people_to_sign_in).
+    if !identity::DEV_GUESTS {
+        return Ok(no_guests());
+    }
     end_session(&s, &signed).await?;
     let secure = s.config.is_production();
     let clear: HeaderValue = cookie::clear(identity::cookie_name(secure), secure);

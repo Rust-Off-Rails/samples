@@ -8,9 +8,11 @@
 mod client;
 mod cluster;
 mod live_room;
+mod people;
 mod presence;
 mod protocol;
 mod resume;
 mod security;
 mod tokens;
 mod transports;
+// samples: realtime test mods

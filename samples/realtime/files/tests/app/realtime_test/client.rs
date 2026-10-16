@@ -21,7 +21,7 @@ use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 use tower::ServiceExt;
 
-use crate::factories;
+use super::people;
 
 /// APP_URL's origin in `Config::test()`.
 pub const ORIGIN: &str = "http://localhost:3000";
@@ -42,7 +42,7 @@ pub async fn serve(state: AppState) -> (SocketAddr, JoinHandle<()>) {
     (addr, handle)
 }
 
-/// A signed-in guest: what a browser holds.
+/// A signed-in person (a guest, or an account with auth-core): what a browser holds.
 #[derive(Clone, Debug)]
 pub struct Guest {
     pub id: i64,
@@ -62,23 +62,21 @@ impl Guest {
 
     /// Another browser of the same person: a second session.
     pub async fn second_session(&self, state: &AppState) -> Guest {
-        let (session, token) =
-            offrails_host::models::guest_session::start(&state.db, self.id, chrono::Utc::now())
-                .await
-                .expect("session");
+        let (session_id, token) = people::start_session(state, self.id).await;
         Guest {
-            session_id: session.id,
+            session_id,
             token,
             ..self.clone()
         }
     }
 }
 
+/// A signed-in person named `name` (a development guest, or an account with auth-core).
 pub async fn guest(state: &AppState, name: &str) -> Guest {
-    let (g, session_id, token) = factories::create_guest(&state.db, name).await;
+    let (id, name, session_id, token) = people::create(state, name).await;
     Guest {
-        id: g.id,
-        name: g.name,
+        id,
+        name,
         session_id,
         token,
     }

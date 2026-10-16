@@ -4,11 +4,11 @@
 use axum::http::StatusCode;
 use offrails_host::channels::identity;
 use offrails_host::config::Config;
-use offrails_host::models::guest_session;
 use serde_json::json;
 use tower::ServiceExt;
 
 use super::client::{Relay, Ws, browser_request, guest, router_of, serve};
+use super::people;
 use crate::support::{TestApp, wait_until};
 
 #[tokio::test]
@@ -230,9 +230,7 @@ async fn logout_ends_relays_with_bye() {
     let mut sse = Relay::sse(&app.state, &ann).await;
     let poll = Relay::longpoll(&app.state, &ann).await;
     assert_eq!(app.state.hub.conns_of(&ann.key()), 2);
-    guest_session::destroy(app.db(), ann.session_id)
-        .await
-        .unwrap();
+    people::end_session(app.db(), ann.session_id).await;
     offrails_host::channels::session_ended(&app.state, ann.id);
     // The stream says why, then ends.
     let bye = sse.recv_where("bye", |v| v["t"] == "bye").await;

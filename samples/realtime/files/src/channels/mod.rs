@@ -12,6 +12,7 @@
 
 pub mod identity;
 pub mod live_room;
+// samples: channel mods
 
 use std::sync::Arc;
 

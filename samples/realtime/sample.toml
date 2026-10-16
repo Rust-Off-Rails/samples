@@ -416,24 +416,6 @@ mod realtime_test;
 file = "tests/app/factories.rs"
 anchor = "factories"
 text = '''
-/// A development guest and a session for them: `(guest, session id, raw cookie token)`.
-pub async fn create_guest(
-    db: &sea_orm::DatabaseConnection,
-    name: &str,
-) -> (offrails_host::models::guest::Model, i64, String) {
-    let now = chrono::Utc::now();
-    let new = offrails_host::models::guest::GuestParams { name: name.into() }
-        .validate()
-        .expect("a valid name");
-    let guest = offrails_host::models::guest::create(db, new, now)
-        .await
-        .expect("guest");
-    let (session, token) = offrails_host::models::guest_session::start(db, guest.id, now)
-        .await
-        .expect("session");
-    (guest, session.id, token)
-}
-
 /// A room (the migration seeds `lobby`, `design` and the members-only `backstage`).
 pub async fn find_room(db: &sea_orm::DatabaseConnection, slug: &str) -> offrails_host::models::room::Model {
     offrails_host::models::room::find_by_slug(db, slug)
@@ -479,4 +461,48 @@ text = '''
 # APP_REALTIME_ORIGINS=                            # extra origins a token-authenticated socket may come from, comma-separated
 # APP_CLUSTER=false                                # true: nodes share presence and broadcasts over Postgres LISTEN/NOTIFY
 # APP_NODE=                                        # this node's name on /dev/sockets (default host:pid)
+'''
+
+# --- With auth-core: accounts replace the development guests (applied only when auth-core is
+# installed, before or after this sample; tools/install.sh `when`).
+
+[[wire]]
+file = "src/channels/mod.rs"
+anchor = "channel mods"
+when = "auth-core"
+text = '''
+pub mod accounts;
+'''
+
+[[wire]]
+file = "src/channels/identity.rs"
+anchor = "identity source"
+when = "auth-core"
+text = '''
+pub use crate::channels::accounts::{DEV_GUESTS, by_session, current, session_live};
+'''
+
+[[wire]]
+file = "src/controllers/auth.rs"
+anchor = "sessions ended"
+when = "auth-core"
+text = '''
+crate::channels::session_ended(state, user_id);
+'''
+
+[[wire]]
+file = "tests/app/realtime_test/mod.rs"
+anchor = "realtime test mods"
+when = "auth-core"
+text = '''
+mod accounts;
+mod people_accounts;
+'''
+
+[[wire]]
+file = "tests/app/realtime_test/people.rs"
+anchor = "realtime people"
+when = "auth-core"
+text = '''
+pub use super::people_accounts::{create, end_all_sessions, end_session, idle_session, start_session};
 '''

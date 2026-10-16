@@ -1,6 +1,7 @@
 //! The live room's pages, the htmx refresh helper, development guests and /dev/sockets.
 
 use axum::http::StatusCode;
+use offrails_host::channels::identity;
 use offrails_host::config::{AppEnv, Config};
 use offrails_host::models::{room, room_message};
 use serde_json::{Value, json};
@@ -64,10 +65,15 @@ async fn signed_out_visitors_are_sent_to_sign_in() {
         .await
         .assert_redirect_to("/session/new");
     app.get("/live").await.assert_redirect_to("/session/new");
+    // Development signs guests in; with accounts (auth-core) it's the app's sign-in there too.
     let dev = TestApp::with_config(development()).await;
     dev.get("/live/lobby")
         .await
-        .assert_redirect_to("/dev/guests/sign-in");
+        .assert_redirect_to(if identity::DEV_GUESTS {
+            "/dev/guests/sign-in"
+        } else {
+            "/session/new"
+        });
 }
 
 #[tokio::test]
@@ -152,6 +158,10 @@ async fn editing_the_headline_refreshes_the_header_on_every_open_page() {
 
 #[tokio::test]
 async fn development_guests_sign_in_and_signing_out_closes_their_sockets() {
+    if !identity::DEV_GUESTS {
+        // Accounts replaced the guests: accounts.rs proves their sign-out and the guest pages.
+        return;
+    }
     let app = TestApp::with_config(development()).await;
     app.get("/dev/guests/sign-in")
         .await
@@ -298,10 +308,12 @@ async fn the_live_room_and_dev_sockets_follow_the_theme_switch() {
         let tag = format!(r#"<html lang="en" data-theme="{theme}">"#);
         app.clear_cookies();
         app.set_cookie("offrails_theme", theme);
-        app.get("/dev/guests/sign-in")
-            .await
-            .assert_ok()
-            .assert_contains(&tag);
+        if identity::DEV_GUESTS {
+            app.get("/dev/guests/sign-in")
+                .await
+                .assert_ok()
+                .assert_contains(&tag);
+        }
         app.get("/dev/sockets")
             .await
             .assert_ok()

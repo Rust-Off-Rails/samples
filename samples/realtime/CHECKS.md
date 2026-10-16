@@ -54,9 +54,13 @@ A realtime connection is authenticated once and then lives for hours, through lo
 | An idle connection's task stays small (10,000 sockets) | `an_idle_connection_future_stays_small` |
 | Links into the live room and `/dev/sockets` aren't boosted (their scripts and styles load in `<head>`) | `links_into_the_live_room_and_dev_sockets_are_not_boosted` |
 | `/dev/sockets` shows connections, topics, presence and frames | `dev_sockets_shows_connections_topics_presence_and_frames` |
+| With auth-core, people are accounts: signing out through auth-core, or "sign out everywhere else", closes those sessions' sockets at once (the realtime suite then runs on accounts) | `signing_out_through_auth_core_closes_that_sessions_sockets_at_once`, `signing_out_everywhere_else_closes_the_other_devices_sockets`, `every_session_ending_path_calls_sessions_ended` |
+| With auth-core, presence shows a display name, never the address; the guest pages send people to sign in and never touch an account's session | `an_accounts_presence_shows_a_name_never_the_email`, `with_accounts_the_guest_pages_send_people_to_sign_in` |
 | The live room, the guest sign-in and `/dev/sockets` follow the kernel theme switch (`data-theme` from the cookie); `sockets.css` uses the kernel's `light-dark()` tokens, no `prefers-color-scheme` block | `the_live_room_and_dev_sockets_follow_the_theme_switch`, `every_kernel_page_renders_data_theme` |
 
 ## In a browser (not part of the test suite)
+
+The e2e scripts sign in as development guests (realtime alone). With auth-core installed, `tools/screenshots.sh realtime` drives the same room with three accounts signed in by emailed code, and fails on any console error.
 
 - Two people in two browser contexts see each other's presence, typing, messages (as text) and waves; a third whose WebSocket is blocked runs on SSE, a fourth with SSE blocked too on long polling, and all four talk; signing out closes the page's connection and the others see the person leave; no console errors (CSP included): `BASE=… node tests/e2e/live_room.e2e.mjs`.
 - Every tab updates: `SCENARIO=tests/e2e/live.scenario.mjs BASE=… TABS=40 bash .offrails/tools/browser-smoke/run.sh live-tabs` (serve HTTPS for HTTP/2; over HTTP/1.1 tabs past ~6 stall by design of the browser).

@@ -7,11 +7,12 @@ use std::time::Duration;
 use offrails_host::config::Config;
 use offrails_host::kernel::cluster::{Cluster, LocalBus, Timing};
 use offrails_host::kernel::hub::Hub;
-use offrails_host::models::{guest_session, room};
+use offrails_host::models::room;
 use offrails_host::state::AppState;
 use serde_json::json;
 
 use super::client::{Ws, guest, serve};
+use super::people;
 use crate::factories;
 use crate::support::{TestApp, wait_until};
 
@@ -88,7 +89,7 @@ async fn a_revocation_on_one_node_closes_sockets_on_another() {
     let mut ws = Ws::as_guest(addr_b, &ann).await;
     ws.join("room:lobby", None).await.unwrap();
     // Signed out through node A.
-    guest_session::destroy(&a.db, ann.session_id).await.unwrap();
+    people::end_session(&a.db, ann.session_id).await;
     offrails_host::channels::session_ended(&a, ann.id);
     assert_eq!(ws.closed().await, (4401, Some("revoked".into())));
 }

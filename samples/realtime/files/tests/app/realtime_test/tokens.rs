@@ -3,10 +3,10 @@
 use axum::http::StatusCode;
 use offrails_host::config::Config;
 use offrails_host::kernel::socket_token;
-use offrails_host::models::guest_session;
 use serde_json::Value;
 
 use super::client::{Guest, ORIGIN, Ws, guest, serve};
+use super::people;
 use crate::support::TestApp;
 
 async fn mint(app: &TestApp, g: &Guest) -> String {
@@ -111,9 +111,7 @@ async fn a_token_from_an_ended_session_is_refused_and_a_token_socket_closes_when
         .await
         .unwrap();
     ws.join("room:lobby", None).await.unwrap();
-    guest_session::destroy(app.db(), ann.session_id)
-        .await
-        .unwrap();
+    people::end_session(app.db(), ann.session_id).await;
     offrails_host::channels::session_ended(&app.state, ann.id);
     assert_eq!(ws.closed().await, (4401, Some("revoked".into())));
     assert_eq!(

@@ -9,11 +9,11 @@ use offrails_host::config::{AppEnv, Config};
 use offrails_host::kernel::channels::SocketConfig;
 use offrails_host::kernel::cluster::Cluster;
 use offrails_host::kernel::hub::Hub;
-use offrails_host::models::{guest_session, room};
-use sea_orm::{ActiveModelTrait, EntityTrait, Set};
+use offrails_host::models::room;
 use serde_json::json;
 
 use super::client::{ORIGIN, Ws, config_revalidating_every, guest, serve};
+use super::people;
 use crate::factories;
 use crate::support::{TestApp, wait_until};
 
@@ -210,9 +210,7 @@ async fn logout_closes_that_sessions_sockets_only() {
         ws.join("room:lobby", None).await.unwrap();
     }
     // Sign out the laptop's session, as the sign-out handler does.
-    guest_session::destroy(app.db(), ann.session_id)
-        .await
-        .unwrap();
+    people::end_session(app.db(), ann.session_id).await;
     offrails_host::channels::session_ended(&app.state, ann.id);
 
     assert_eq!(laptop.closed().await, (4401, Some("revoked".into())));
@@ -232,9 +230,7 @@ async fn signing_out_everywhere_closes_every_socket_of_that_person() {
     let mut laptop = Ws::as_guest(addr, &ann).await;
     let mut phone = Ws::as_guest(addr, &ann_phone).await;
     let mut other = Ws::as_guest(addr, &bob).await;
-    guest_session::destroy_all_for(app.db(), ann.id)
-        .await
-        .unwrap();
+    people::end_all_sessions(app.db(), ann.id).await;
     offrails_host::channels::session_ended(&app.state, ann.id);
     assert_eq!(laptop.closed().await.0, 4401);
     assert_eq!(phone.closed().await.0, 4401);
@@ -249,14 +245,7 @@ async fn an_expired_session_is_closed_by_revalidation() {
     let mut ws = Ws::as_guest(addr, &ann).await;
     ws.join("room:lobby", None).await.unwrap();
     // Idle for longer than the session lifetime, with no revocation signal at all.
-    let row = guest_session::Entity::find_by_id(ann.session_id)
-        .one(app.db())
-        .await
-        .unwrap()
-        .unwrap();
-    let mut active: guest_session::session::ActiveModel = row.into();
-    active.last_seen_at = Set(chrono::Utc::now() - chrono::Duration::days(31));
-    active.update(app.db()).await.unwrap();
+    people::idle_session(app.db(), ann.session_id, 31).await;
     assert_eq!(ws.closed().await, (4401, Some("revoked".into())));
 }
 
