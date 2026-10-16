@@ -21,8 +21,12 @@ running() { [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; }
 case "${1:-}" in
   stop)
     if running; then
-      kill "$(cat "$pidfile")"
-      echo "stopped demo (PID $(cat "$pidfile"))"
+      pid=$(cat "$pidfile")
+      kill "$pid"
+      # The server drains open requests and sockets before it exits: wait, so the port is free.
+      i=0
+      while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 30 ]; do sleep 1; i=$((i + 1)); done
+      echo "stopped demo (PID $pid)"
     else
       echo "no demo running"
     fi
