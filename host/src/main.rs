@@ -12,9 +12,7 @@ use offrails_host::{
     tasks,
 };
 use tokio::net::TcpListener;
-use tracing_subscriber::{
-    EnvFilter, Layer, Registry, layer::SubscriberExt, util::SubscriberInitExt,
-};
+use tracing_subscriber::{Layer, Registry, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Parser)]
 #[command(name = "app", about = "Offrails Host")]
@@ -85,12 +83,16 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn init_tracing(config: &Config) {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new(match config.env {
+    let directives = std::env::var("RUST_LOG").unwrap_or_else(|_| {
+        match config.env {
             AppEnv::Production => "info",
             _ => "info,offrails_host=debug,tower_http=debug",
-        })
+        }
+        .to_owned()
     });
+    // SECURITY: the filter caps targets that would log raw request URIs (tokens), whatever
+    // RUST_LOG says (test: tokens_in_request_uris_never_reach_the_logs).
+    let filter = kernel::redact::log_filter(&directives);
     // Layers samples add (a dashboard's log tail and traces), beside the formatter.
     let layers: Vec<Box<dyn Layer<Registry> + Send + Sync>> = vec![
         // samples: tracing layers

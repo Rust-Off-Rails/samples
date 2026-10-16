@@ -251,7 +251,11 @@ pub async fn retry_after(mut response: Response) -> Response {
 /// Logs every 5xx with its request id, method and path, so no status a client sees goes
 /// unexplained (an extractor's rejection or a layer's own response has no other log line).
 pub async fn log_server_errors(req: Request, next: Next) -> Response {
-    let (method, path) = (req.method().clone(), req.uri().path().to_owned());
+    // SECURITY: the path as logs may show it, tokens redacted (test: tokens_in_request_uris_never_reach_the_logs).
+    let (method, path) = (
+        req.method().clone(),
+        crate::kernel::redact::path(req.uri().path()),
+    );
     let id = req.headers().get("x-request-id").cloned();
     let response = next.run(req).await;
     if response.status().is_server_error() {

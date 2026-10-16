@@ -8,6 +8,7 @@ pub mod db;
 pub mod flash;
 pub mod introspect;
 pub mod rate_limit;
+pub mod redact;
 pub mod security;
 pub mod theme;
 pub mod tls;

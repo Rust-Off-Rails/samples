@@ -44,7 +44,7 @@ use crate::support::TestApp;
 type Log = Arc<Mutex<Vec<i64>>>;
 
 fn dispatcher(log: Log) -> DispatchFn {
-    Arc::new(move |worker, _args, job| {
+    Arc::new(move |worker, args, job| {
         let log = log.clone();
         Box::pin(async move {
             match worker.as_str() {
@@ -55,6 +55,14 @@ fn dispatcher(log: Log) -> DispatchFn {
                     Ok(Outcome::Done)
                 }
                 "fail" => Err(anyhow::anyhow!("connection refused").context("charging card 42")),
+                "hook" => {
+                    let event = args["event"].as_str().unwrap_or_default().to_owned();
+                    Err(anyhow::anyhow!("connection refused (os error 61)")
+                        .context("connecting to hooks.partner.invalid:443")
+                        .context(format!(
+                            "POST https://hooks.partner.invalid/v2/events ({event})"
+                        )))
+                }
                 "snooze" => Ok(Outcome::Snooze(chrono::Duration::minutes(5))),
                 "cancel" => Ok(Outcome::Cancel("order 7 was deleted".into())),
                 "discard" => Ok(Outcome::Discard("invalid address".into())),
@@ -1187,7 +1195,9 @@ async fn stats_queues_metrics_and_error_groups() {
     assert_eq!(admin::pause_all(app.db()).await.unwrap(), 2);
     assert_eq!(admin::resume_all(app.db()).await.unwrap(), 2);
 
-    let buckets = admin::throughput(app.db(), Utc::now(), 60).await.unwrap();
+    let throughput = admin::throughput(app.db(), Utc::now(), 60).await.unwrap();
+    assert!(throughput.wait_p95_ms.is_some() && throughput.wait_p50_ms.is_some());
+    let buckets = throughput.buckets;
     assert_eq!(buckets.len(), 60);
     assert_eq!(buckets.iter().map(|b| b.completed).sum::<u64>(), 4);
     assert_eq!(buckets.iter().map(|b| b.failed).sum::<u64>(), 3);
@@ -1205,8 +1215,48 @@ async fn stats_queues_metrics_and_error_groups() {
     let groups = admin::error_groups(app.db(), 1000).await.unwrap();
     assert_eq!(groups.len(), 1, "three orders, one error shape");
     assert_eq!(groups[0].count, 3);
-    assert_eq!(groups[0].message, "charging card N: connection refused");
-    assert_eq!(groups[0].search.as_deref(), Some("charging card"));
+    assert_eq!(groups[0].message, "connection refused");
+    assert_eq!(groups[0].search.as_deref(), Some("connection refused"));
+}
+
+/// INVARIANT: the same root cause with different outer contexts is one group.
+#[tokio::test]
+async fn one_root_cause_is_one_group_with_its_variants() {
+    let app = TestApp::new().await;
+    for event in ["order.paid", "order.refunded", "customer.updated"] {
+        insert(
+            app.db(),
+            builder_with("hook", json!({"event": event})).max_attempts(1),
+        )
+        .await;
+    }
+    // Another root cause stays its own group.
+    insert(app.db(), builder("fail").max_attempts(1)).await;
+    drain(&app).await;
+    let groups = admin::error_groups(app.db(), 1000).await.unwrap();
+    assert_eq!(groups.len(), 2);
+    let hooks = groups.iter().find(|g| g.worker == "hook").unwrap();
+    assert_eq!(hooks.count, 3);
+    assert_eq!(hooks.root, "connection refused (os error N)");
+    assert_eq!(hooks.host.as_deref(), Some("hooks.partner.invalid"));
+    assert_eq!(
+        hooks.message,
+        "connection refused (os error N) · hooks.partner.invalid"
+    );
+    assert_eq!(hooks.variant_count, 3);
+    let mut variants = hooks.variants.clone();
+    variants.sort();
+    assert_eq!(
+        variants,
+        ["customer.updated", "order.paid", "order.refunded"]
+    );
+    // The group's list filter matches all three jobs.
+    let filter = JobFilter {
+        worker: Some("hook".into()),
+        error: hooks.search.clone(),
+        ..Default::default()
+    };
+    assert_eq!(admin::count_matching(app.db(), &filter).await.unwrap(), 3);
 }
 
 // ---------------------------------------------------------------------------

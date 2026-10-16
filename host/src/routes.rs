@@ -26,7 +26,7 @@ use tower_http::{
 use crate::{
     controllers::{dev, errors, health, home, meta, migrations, theme},
     error::{self, AppError},
-    kernel::{assets, flash, security},
+    kernel::{assets, flash, redact, security},
     state::AppState,
 };
 
@@ -116,7 +116,18 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
             security::middleware,
         ))
         .layer(PropagateRequestIdLayer::new(x_request_id.clone()))
-        .layer(TraceLayer::new_for_http())
+        // SECURITY: the request span logs the URI with tokens redacted (emailed links carry one in
+        // the path), never the raw URI (test: tokens_in_request_uris_never_reach_the_logs).
+        .layer(TraceLayer::new_for_http().make_span_with(
+            |req: &axum::http::Request<axum::body::Body>| {
+                tracing::debug_span!(
+                    "request",
+                    method = %req.method(),
+                    uri = %redact::uri(req.uri()),
+                    version = ?req.version(),
+                )
+            },
+        ))
         .layer(from_fn(error::log_server_errors))
         // samples: outer layers
         .layer(SetRequestIdLayer::new(x_request_id, MakeRequestUuid))

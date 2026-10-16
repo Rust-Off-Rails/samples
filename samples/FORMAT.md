@@ -51,7 +51,7 @@ pub mod mailbox_web;
 | `depends_on` | yes (may be `[]`) | Samples this one needs, installed first |
 | `extracted_from` | yes | Where the code came from, in public words ("Rust off Rails apps") |
 | `crates` | yes (may be `[]`) | `cargo add` argument lines |
-| `[[wire]]` | no | One insertion into a shared file each |
+| `[[wire]]` | no | One insertion into a shared file each (`file`, `anchor`, `text`, optional `when`) |
 
 ### Wiring
 
@@ -74,6 +74,26 @@ A `[[wire]]` puts its `text` on the lines **above** the anchor line, indented li
 - It is self-contained: use full paths (`crate::kernel::mailer::Mailer`) rather than adding `use` lines elsewhere.
 - Run `cargo fmt --all` after installing (the Definition of Done does): `rustfmt` sorts `mod` lines and may rewrap.
 
+#### Optional wiring (`when`)
+
+A sample that works alone but adapts to another one, without depending on it, marks those wires `when = "<other sample>"`:
+
+```toml
+[[wire]]
+file = "src/channels/identity.rs"
+anchor = "identity source"
+when = "auth-core"               # applied only when auth-core is installed too
+text = '''
+pub use crate::channels::accounts::{DEV_GUESTS, by_session, current, session_live};
+'''
+```
+
+- `install.sh` applies it when `<other>` is already installed, or later, when installing `<other>` (it then applies every waiting wire of the samples already in the app). Without `<other>` it prints `wait … (applies when <other> is installed)` and changes nothing.
+- Code that only compiles with `<other>` ships as a normal file that **no module declares** (`src/channels/accounts.rs`); an optional wire declares it (`pub mod accounts;`). Without `<other>` the file is copied but not built.
+- To switch behavior without editing code, the sample re-exports its default with a glob under the anchor (`pub use guests::*;`) and the optional wire adds an explicit `pub use` above it: explicit names win over a glob, so the default stays compiled but unused.
+- By hand: README "Wiring" lists the optional wires under "With <other> installed".
+- `ci.sh all` proves the combination; each sample alone proves it without.
+
 The anchors `host/` provides (each file says what goes there):
 
 | File | Anchors |
@@ -82,6 +102,7 @@ The anchors `host/` provides (each file says what goes there):
 | `src/kernel/mod.rs` | `kernel mods` |
 | `src/kernel/ui.rs` | `kernel tabs` (a `Tab { … }` in the kernel header), `hidden tabs` (the key of a host tab a sample replaces, e.g. `"system"`) |
 | `src/kernel/introspect.rs` | `introspect sections` (`out["x"] = …;`) |
+| `src/kernel/redact.rs` | `token routes` (a route pattern whose `{token}` segment is a secret, e.g. `"/login_links/{token}",`: logs show it as `[redacted]`) |
 | `src/config.rs` | `config fields`, `config debug`, `config parse`, `config init`, `config test`, `config sections` (a sample's own config struct, appended) |
 | `src/state.rs` | `state fields`, `state build`, `state init`, `state fns` |
 | `src/routes.rs` | `routes` (`app = app.route(…)`), `dev routers` (merged in development only), `outer layers` (a `.layer(…)` outside everything but the request id: it sees every request, panics and timeouts included), `paths`, `routes table` (`ROUTES` rows) |
@@ -105,6 +126,16 @@ The anchors `host/` provides (each file says what goes there):
 | `tests/app/theme_switch_test.rs` | `kernel pages` (every full page a sample renders in the kernel layout) |
 | `.env.example` | `env` |
 | `compose.yaml` | `compose env` |
+
+Samples that own a shared file add anchors of their own for the samples that depend on them:
+
+| File | Sample | Anchors |
+|------|--------|---------|
+| `src/mailers/mod.rs` | mailer | `mailer mods` (`pub mod <name>_mailer;`) |
+| `src/mailers/previews.rs` | mailer | `previews` (a `Preview { … },` in `PREVIEWS`) |
+| `src/controllers/auth.rs` | auth-core | `sessions ended` (in `auth::sessions_ended(state, user_id)`, called after every commit that ends sessions); the auth samples' other anchors are listed in their READMEs |
+| `src/channels/mod.rs` | realtime | `channel mods` |
+| `src/channels/identity.rs` | realtime | `identity source` (an explicit `pub use` of another people source, above the guests' glob) |
 
 An app made by `generators/new.md` before 0.7.0 has no anchors. Then `install.sh` refuses and names each missing anchor; the agent applies that wiring by hand at the spot the anchor table describes (README "Wiring" says it in words for every insertion).
 
@@ -179,7 +210,7 @@ TEST_DATABASE_URL=postgres://… tools/ci.sh <sample>   # alone
 TEST_DATABASE_URL=postgres://… tools/ci.sh all        # together with every other sample
 ```
 
-`ci.sh` copies `host/` to `.cache/ci/<name>/app`, installs with `install.sh`, then runs `cargo fmt` (and fails when a shipped file changes: ship formatted code), builds the CSS, regenerates `docs/routes.md`, `clippy -D warnings` (plus the framework's `unwrap_used`/`expect_used` gate on non-test code), the test suite on SQLite and on Postgres, `offrails-check`, `cargo deny`, `cargo audit` and `fmt --check`. Repo-wide security gates (`tools/security-check.sh`, gitleaks over the history, the ZAP baseline against the demo with every sample) run in `.github/workflows/ci.yml`. Never weaken a gate to get green.
+`ci.sh` copies `host/` to `.cache/ci/<name>/app`, installs with `install.sh`, then runs `cargo fmt` (and fails when a shipped file changes: ship formatted code; a shipped file another installed sample wires into is checked as shipped, by rustfmt on that file alone), builds the CSS, regenerates `docs/routes.md`, `clippy -D warnings` (plus the framework's `unwrap_used`/`expect_used` gate on non-test code), the test suite on SQLite and on Postgres, `offrails-check`, `cargo deny`, `cargo audit` and `fmt --check`. Repo-wide security gates (`tools/security-check.sh`, gitleaks over the history, the ZAP baseline against the demo with every sample) run in `.github/workflows/ci.yml`. Never weaken a gate to get green.
 
 ## host/ is frozen
 

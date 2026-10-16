@@ -17,6 +17,8 @@ jobs:
         run: shellcheck tools/*.sh
       - name: Every SECURITY marker and CHECKS.md row cites a test that exists
         run: tools/security-check.sh
+      - name: install.sh resolves dependencies (diamonds, installed samples, cycles)
+        run: tools/install-test.sh
 
   samples:
     runs-on: ubuntu-latest

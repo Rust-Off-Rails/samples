@@ -43,7 +43,7 @@ Through the samples MCP server: `get_sample mailer`. Or by hand, in the app root
 
 ## Adapting it
 
-- **A new mailer**: copy `src/mailers/test_mailer.rs` to `src/mailers/<name>_mailer.rs` and its two templates to `templates/mailers/<name>_mailer/`; one function per action returning `Result<Email, AppError>`; build every link with `config.app_url` + a `paths::` helper; add a `Preview` per action in `previews.rs` (marked `// APP:`).
+- **A new mailer**: copy `src/mailers/test_mailer.rs` to `src/mailers/<name>_mailer.rs` and its two templates to `templates/mailers/<name>_mailer/`; one function per action returning `Result<Email, AppError>`; build every link with `config.app_url` + a `paths::` helper; add a `Preview` per action in `previews.rs` (marked `// APP:`). A sample that ships a mailer (auth-core) wires its `pub mod` at `// samples: mailer mods` in `src/mailers/mod.rs` and its previews at `// samples: previews` in `PREVIEWS`; keep both anchors.
 - **Cc, Bcc, Reply-To, attachments**: `Email::new(..).cc(..).bcc(..).reply_to(..).attach(Attachment::new(name, type, &bytes))`.
 - **Your brand**: `templates/mailers/layout.html` is the shell every HTML email extends. Inline styles only (clients ignore `<link>`); keep the dark-mode `<style>` block's class names in step with it.
 - **Try real delivery from development**: `MAILER=smtp SMTP_URL=smtp://localhost:1025` with a local catcher (Mailpit), or a provider's sandbox.

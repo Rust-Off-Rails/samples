@@ -3,5 +3,6 @@
 
 pub mod previews;
 pub mod test_mailer;
+// samples: mailer mods
 
 pub use crate::kernel::mailer::{Attachment, Email};

@@ -10,7 +10,7 @@
         <th scope="row"><a class="mono" href="{{ q.href }}">{{ q.name }}</a></th>
         <td><span class="pill {{ q.status_class }}">{{ q.status }}</span></td>
         <td class="num">{{ q.limit }}</td>
-        <td class="mono">{% if q.rate.is_empty() %}<span class="muted">–</span>{% else %}{{ q.rate }}{% endif %}</td>
+        <td class="mono">{% if q.rate.is_empty() %}<span class="muted">{{ crate::kernel::jobs_web::views::NO_DATA }}</span>{% else %}{{ q.rate }}{% endif %}</td>
         <td class="num">{{ q.nodes }}</td>
         <td class="num">{{ q.executing }}</td>
         <td class="num">{{ q.available }}</td>
