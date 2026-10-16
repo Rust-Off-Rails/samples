@@ -1,0 +1,14 @@
+{% extends "kernel/layout.html" %}
+{% block content %}
+<div class="dash" data-dashboard data-stream="{{ d.live }}" data-refresh="{{ d.refresh }}">
+  <nav class="dash-nav" aria-label="Dashboard">
+    {% for n in d.nav %}<a href="{{ n.href }}"{% if n.current %} aria-current="page"{% endif %}>{{ n.label }}</a>{% endfor %}
+    {% if !d.live.is_empty() %}
+    <span class="dash-live" data-live-status><span class="dot" aria-hidden="true"></span><span data-live-text>Live</span></span>
+    <button type="button" class="btn quiet dash-pause" data-live-toggle aria-pressed="false" hidden>Pause</button>
+    {% endif %}
+  </nav>
+  {% if d.ro %}<p class="dash-ro">Read-only production view: no load lab, no EXPLAIN, no parameters, no logs.</p>{% endif %}
+  {% block dash %}{% endblock %}
+</div>
+{% endblock %}

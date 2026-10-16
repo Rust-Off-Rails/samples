@@ -1,0 +1,8 @@
+{% extends "kernel/dashboard/_layout.html" %}
+{% block dash %}
+<header class="dash-head">
+  <h1>Charts <span class="muted">last {{ range }}</span></h1>
+  <nav class="segmented" aria-label="Range">{% for r in ranges %}<a href="{{ r.href }}"{% if r.current %} aria-current="true"{% endif %}>{{ r.label }}</a>{% endfor %}</nav>
+</header>
+<div data-live="charts">{% include "kernel/dashboard/_charts.html" %}</div>
+{% endblock %}

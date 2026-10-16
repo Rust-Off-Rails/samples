@@ -1,0 +1,23 @@
+<figure class="chart" id="chart-{{ chart.key }}" data-chart data-unit="{{ chart.unit }}" data-t0="{{ chart.t0 }}" data-step="{{ chart.step }}">
+  <figcaption>
+    <h2>{{ chart.title }}</h2>
+    <span class="legend">{% for l in chart.lines %}<span class="key {{ l.class }}"><span class="swatch" aria-hidden="true"></span>{{ l.name }} <b>{{ l.last }}</b></span>{% endfor %}</span>
+  </figcaption>
+  <div class="plot-wrap">
+    <svg class="plot" viewBox="0 0 {{ chart.w }} {{ chart.h }}" role="img" aria-label="{{ chart.summary }}" focusable="false">
+      {% for g in chart.grid %}<line class="grid" x1="{{ chart.x0 }}" x2="{{ chart.x1 }}" y1="{{ g.pos }}" y2="{{ g.pos }}"/><text class="ylab" x="{{ chart.x0 }}" dx="-6" y="{{ g.pos }}" dy="4">{{ g.label }}</text>{% endfor %}
+      {% for t in chart.xticks %}<text class="xlab" x="{{ t.pos }}" y="{{ chart.h }}" dy="-5">{{ t.label }}</text>{% endfor %}
+      {% for l in chart.lines %}<path class="area {{ l.class }}" d="{{ l.area }}"/>{% endfor %}
+      {% for l in chart.lines %}<path class="line {{ l.class }}" d="{{ l.d }}" data-name="{{ l.name }}" data-values="{{ l.values }}"/>{% endfor %}
+      {% if chart.empty %}<text class="nodata" x="{{ chart.w / 2 }}" y="{{ chart.h / 2 }}">Collecting: the first point arrives within a second</text>{% endif %}
+    </svg>
+  </div>
+  <details class="data">
+    <summary>Data table</summary>
+    <div class="scroll"><table>
+      <caption class="visually-hidden">{{ chart.title }}, newest first</caption>
+      <thead><tr>{% for h in chart.table_head %}<th scope="col">{{ h }}</th>{% endfor %}</tr></thead>
+      <tbody>{% for row in chart.table %}<tr>{% for v in row %}<td>{{ v }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+    </table></div>
+  </details>
+</figure>
