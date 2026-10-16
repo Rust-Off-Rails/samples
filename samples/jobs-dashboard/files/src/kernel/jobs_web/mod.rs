@@ -38,6 +38,7 @@ use crate::{
             admin::{self, Action, JobFilter},
             next_run, plugins,
         },
+        theme::ThemeSwitch,
         ui::{self, Chrome},
     },
     state::AppState,
@@ -89,7 +90,12 @@ pub struct Nav {
     pub return_to: String,
 }
 
-fn chrome(state: &AppState, title: &str, flash: Option<Extension<RequestFlash>>) -> Chrome {
+fn chrome(
+    state: &AppState,
+    title: &str,
+    flash: Option<Extension<RequestFlash>>,
+    theme: ThemeSwitch,
+) -> Chrome {
     // WHY: the page declares its own stylesheet and script; the kernel layout links exactly
     // these (test: the_dashboard_loads_its_own_css_and_js).
     Chrome::new(
@@ -98,6 +104,7 @@ fn chrome(state: &AppState, title: &str, flash: Option<Extension<RequestFlash>>)
         state.assets.assets(),
         state.config.is_development(),
         flash.and_then(|f| f.0.0),
+        theme,
     )
     .stylesheet(state.assets.path("kernel/jobs.css"))
     .script(state.assets.path("kernel/jobs.js"))
@@ -252,6 +259,7 @@ async fn overview(
     HxRequest(htmx): HxRequest,
     Query(q): Query<PartQuery>,
     flash: Option<Extension<RequestFlash>>,
+    theme: ThemeSwitch,
 ) -> Result<Response, AppError> {
     let live = is_live(&q.live);
     let now = Utc::now();
@@ -286,7 +294,7 @@ async fn overview(
         }),
         Some(_) => return Err(AppError::NotFound),
         None => ui::page(OverviewPage {
-            chrome: chrome(&state, "Jobs", flash),
+            chrome: chrome(&state, "Jobs", flash, theme),
             nav: nav(&state, "overview", live, &uri).await?,
             cards: views::cards(&admin::stats(db).await?),
             charts: views::charts(&admin::throughput(db, now, CHART_MINUTES).await?),
@@ -368,6 +376,7 @@ async fn list(
     HxRequest(htmx): HxRequest,
     Query(q): Query<ListQuery>,
     flash: Option<Extension<RequestFlash>>,
+    theme: ThemeSwitch,
 ) -> Result<Response, AppError> {
     let live = is_live(&q.live);
     let now = Utc::now();
@@ -434,7 +443,7 @@ async fn list(
         .map(|q| q.name)
         .collect();
     Ok(ui::page(ListPage {
-        chrome: chrome(&state, "Job list", flash),
+        chrome: chrome(&state, "Job list", flash, theme),
         nav: nav(&state, "list", live, &uri).await?,
         chips: views::chips(&fv),
         newest_href: fv.href(),
@@ -480,6 +489,7 @@ async fn show(
     Path(id): Path<String>,
     Query(q): Query<PartQuery>,
     flash: Option<Extension<RequestFlash>>,
+    theme: ThemeSwitch,
 ) -> Result<Response, AppError> {
     let live = is_live(&q.live);
     let Ok(id) = id.parse::<i64>() else {
@@ -502,7 +512,7 @@ async fn show(
         return Ok(ui::page(JobStatusPart { job: view, live }));
     }
     Ok(ui::page(ShowPage {
-        chrome: chrome(&state, &format!("Job {id}"), flash),
+        chrome: chrome(&state, &format!("Job {id}"), flash, theme),
         nav: nav(&state, "list", live, &uri).await?,
         job: view,
         live,
@@ -534,6 +544,7 @@ async fn errors(
     uri: OriginalUri,
     Query(q): Query<ErrorsQuery>,
     flash: Option<Extension<RequestFlash>>,
+    theme: ThemeSwitch,
 ) -> Result<Response, AppError> {
     let worker = non_empty(&q.worker).unwrap_or_default();
     let mut groups = admin::error_groups(&state.db, ERROR_SCAN).await?;
@@ -541,7 +552,7 @@ async fn errors(
         groups.retain(|g| g.worker == worker);
     }
     Ok(ui::page(ErrorsPage {
-        chrome: chrome(&state, "Errors", flash),
+        chrome: chrome(&state, "Errors", flash, theme),
         nav: nav(&state, "errors", is_live(&q.live), &uri).await?,
         groups: views::error_groups(groups, Utc::now()),
         worker,
@@ -563,6 +574,7 @@ async fn cron(
     Extension(Schedule(schedule)): Extension<Schedule>,
     Query(q): Query<PartQuery>,
     flash: Option<Extension<RequestFlash>>,
+    theme: ThemeSwitch,
 ) -> Result<Response, AppError> {
     let now = Utc::now();
     let last = admin::last_runs(&state.db).await?;
@@ -595,7 +607,7 @@ async fn cron(
         })
         .collect();
     Ok(ui::page(CronPage {
-        chrome: chrome(&state, "Cron", flash),
+        chrome: chrome(&state, "Cron", flash, theme),
         nav: nav(&state, "cron", is_live(&q.live), &uri).await?,
         entries,
     }))
@@ -630,7 +642,13 @@ struct Confirm {
 }
 
 /// Renders the confirmation: the same POST again, with every field and `confirmed=1`.
-fn confirm_page(state: &AppState, c: Confirm) -> Response {
+fn confirm_page(state: &AppState, theme: ThemeSwitch, c: Confirm) -> Response {
+    // WHY: this page answers a POST; the theme switch's no-JS fallback comes back with a GET,
+    // so it returns to where Cancel goes.
+    let theme = ThemeSwitch {
+        return_to: c.cancel_href.clone(),
+        ..theme
+    };
     let mut fields: Vec<(String, String)> = c
         .fields
         .into_iter()
@@ -638,7 +656,7 @@ fn confirm_page(state: &AppState, c: Confirm) -> Response {
         .collect();
     fields.push(("confirmed".into(), "1".into()));
     ui::page(ConfirmPage {
-        chrome: chrome(state, "Confirm", None),
+        chrome: chrome(state, "Confirm", None, theme),
         title: c.title,
         body: c.body,
         action_url: c.action_url,
@@ -661,6 +679,7 @@ fn field<'a>(pairs: &'a [(String, String)], name: &str) -> Option<&'a str> {
 async fn job_action(
     State(state): State<AppState>,
     Path((id, action)): Path<(String, String)>,
+    theme: ThemeSwitch,
     Form(form): Form<Vec<(String, String)>>,
 ) -> Result<Response, AppError> {
     let (Ok(id), Some(action)) = (id.parse::<i64>(), Action::parse(&action)) else {
@@ -693,6 +712,7 @@ async fn job_action(
         };
         return Ok(confirm_page(
             &state,
+            theme,
             Confirm {
                 title: format!("{} job {id}?", action.label()),
                 body,
@@ -719,6 +739,7 @@ async fn job_action(
 async fn bulk(
     State(state): State<AppState>,
     uri: OriginalUri,
+    theme: ThemeSwitch,
     Form(form): Form<Vec<(String, String)>>,
 ) -> Result<Response, AppError> {
     let mut pairs: Vec<(String, String)> = uri
@@ -818,6 +839,7 @@ async fn bulk(
         }
         return Ok(confirm_page(
             &state,
+            theme,
             Confirm {
                 title: format!("{} {}?", action.label(), plural(count, "job")),
                 body: scope,
@@ -875,6 +897,7 @@ async fn queue_action(
 /// `POST /admin/jobs/queues/pause-all`: the deploy switch. Asks first.
 async fn pause_all(
     State(state): State<AppState>,
+    theme: ThemeSwitch,
     Form(form): Form<Vec<(String, String)>>,
 ) -> Result<Response, AppError> {
     let return_to = field(&form, "return_to")
@@ -884,6 +907,7 @@ async fn pause_all(
         let n = admin::queues(&state.db, Utc::now()).await?.len() as u64;
         return Ok(confirm_page(
             &state,
+            theme,
             Confirm {
                 title: format!("Pause all {}?", plural(n, "queue")),
                 body: "No node starts new jobs until you resume. Running jobs finish normally; inserts still work. Use it around deploys and migrations.".into(),

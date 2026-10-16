@@ -229,3 +229,13 @@ text = '''
 "/admin/jobs/errors",
 "/admin/jobs/cron",
 '''
+
+[[wire]]
+file = "tests/app/theme_switch_test.rs"
+anchor = "kernel pages"
+text = '''
+"/admin/jobs",
+"/admin/jobs/list",
+"/admin/jobs/errors",
+"/admin/jobs/cron",
+'''

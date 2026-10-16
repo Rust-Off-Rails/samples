@@ -2,33 +2,26 @@
    whose tokens it uses (--bg --panel --fg --muted --border --hover --accent --ok --warn --err --info).
    Plain CSS: no Tailwind, no app design, so app UI changes never break it. No inline styles anywhere
    (the CSP is style-src 'self'): bars and charts size themselves with SVG attributes and <progress>.
-   Light + dark via prefers-color-scheme; every text/background pair meets WCAG 2.2 AA; usable at 320px.
+   Theme: tokens defined once with `light-dark(<light>, <dark>)`; admin.css sets `color-scheme` from
+   the kernel header's switch (`<html data-theme>`), so the dashboard follows it. No color-scheme
+   media queries: they would ignore the switch. Every text/background pair meets WCAG 2.2 AA in
+   both themes; usable at 320px.
    APP: change the tones below to match your brand; keep the state colors distinct from each other. */
 
 :root {
   --st-executing: var(--info);
   --st-available: var(--accent);
-  --st-scheduled: #6d28d9;
+  --st-scheduled: light-dark(#6d28d9, #c4b5fd);
   --st-retryable: var(--warn);
   --st-discarded: var(--err);
   --st-cancelled: var(--muted);
   --st-completed: var(--ok);
-  --chart-ok: #16a34a;
-  --chart-err: #dc2626;
-  --chart-p50: #0284c7;
-  --chart-p95: #c2410c;
-  --shadow: 0 1px 2px rgb(0 0 0 / .04), 0 1px 1px rgb(0 0 0 / .03);
+  --chart-ok: light-dark(#16a34a, #4ade80);
+  --chart-err: light-dark(#dc2626, #f87171);
+  --chart-p50: light-dark(#0284c7, #7dd3fc);
+  --chart-p95: light-dark(#c2410c, #fdba74);
+  --shadow: 0 1px 2px light-dark(rgb(0 0 0 / .04), transparent), 0 1px 1px light-dark(rgb(0 0 0 / .03), transparent);
   --radius: 10px;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --st-scheduled: #c4b5fd;
-    --chart-ok: #4ade80;
-    --chart-err: #f87171;
-    --chart-p50: #7dd3fc;
-    --chart-p95: #fdba74;
-    --shadow: none;
-  }
 }
 
 .jobs { font-variant-numeric: tabular-nums; }
