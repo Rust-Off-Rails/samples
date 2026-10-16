@@ -182,6 +182,16 @@ pub async fn revoke_all(
     Ok(())
 }
 
+/// Revokes every emailed token of the account, whatever its purpose (an unverified account
+/// claimed by its address's owner: `auth::claim_unverified_account`).
+pub async fn revoke_every_purpose(db: &impl ConnectionTrait, user_id: i64) -> Result<(), AppError> {
+    Entity::delete_many()
+        .filter(Column::UserId.eq(user_id))
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
 /// For `app task auth_cleanup`.
 pub async fn delete_expired(
     db: &impl ConnectionTrait,

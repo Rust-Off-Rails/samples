@@ -296,9 +296,12 @@ pub async fn finish_sign_in(
     audit.device_digest = Some(device_digest.clone());
 
     let txn = db::begin(&state.db).await?;
+    // The session this browser had (any account's): replaced, and its owner told after commit.
+    let mut replaced = None;
     if let Some(old) = auth_cookie::read_session(headers, secure) {
-        // WHY: no sessions_ended here: the replaced session's owner isn't loaded, and anything
-        // still holding it closes at its next session re-check.
+        replaced = session::find_by_token(&txn, &old, now)
+            .await?
+            .map(|(_, u)| u.id);
         session::destroy_by_token(&txn, &old).await?;
     }
     let new_device = auth_event::ever_signed_in(&txn, user.id).await?
@@ -314,6 +317,12 @@ pub async fn finish_sign_in(
     .await?;
     auth_event::record(&txn, Some(user.id), Kind::SignedIn, &audit, now).await?;
     txn.commit().await?;
+    // SECURITY: the replaced session's sockets and streams close now, not at their next re-check
+    // (a shared computer: Ann signs in over Bob's session, Bob's live room must not stay open)
+    // (test: every_session_ending_path_calls_sessions_ended, signing_in_over_a_session_closes_its_sockets)
+    if let Some(old_user) = replaced {
+        sessions_ended(state, old_user);
+    }
 
     if new_device {
         notify(
@@ -408,6 +417,10 @@ pub async fn revoke_everything(
     user_id: i64,
 ) -> Result<(), AppError> {
     session::revoke_all(txn, user_id).await?;
+    // SECURITY: a pending email change (a link to an attacker's address) dies too, or the
+    // attacker who started it still moves the account after the owner secured it
+    // (test: not_me_signs_out_everywhere, a_password_reset_cancels_a_pending_email_change)
+    user_token::revoke_all(txn, user_id, user_token::Purpose::EmailChange).await?;
     // samples: revoke everything
     Ok(())
 }
@@ -420,8 +433,36 @@ pub async fn revoke_other_access(
     keep_session_id: i64,
 ) -> Result<(), AppError> {
     session::revoke_others(txn, user, keep_session_id).await?;
+    // SECURITY: a pending email change started elsewhere dies with the password change
+    // (test: a_password_change_cancels_a_pending_email_change)
+    user_token::revoke_all(txn, user.id, user_token::Purpose::EmailChange).await?;
     // samples: revoke other access
     Ok(())
+}
+
+/// The person who just proved they read the address (a magic link or an emailed code) verifies
+/// the account, and if it was **unverified**, takes it over: everything set up on it before that
+/// proof is dropped, because an attacker may have registered the address first, with a password
+/// the attacker knows, hoping the owner would sign in some other way and verify it for them
+/// (account pre-hijacking). Sessions, emailed tokens and every credential a sign-in sample keeps
+/// (its wire at the anchor) go. Returns `true` when it claimed an unverified account: call
+/// `sessions_ended` after the commit then. Run it in the caller's transaction.
+// SECURITY: without it, the attacker's password still opens the account the owner just verified
+// (test: a_password_set_before_verification_dies_when_the_owner_signs_in_by_link)
+// WHY: verify first: the UPDATE locks the row, so a sign-up racing to set a password either
+// committed before (and its password is deleted below) or waits and finds the account verified.
+pub async fn claim_unverified_account(
+    txn: &impl sea_orm::ConnectionTrait,
+    user_id: i64,
+    now: chrono::DateTime<Utc>,
+) -> Result<bool, AppError> {
+    if !user::mark_verified(txn, user_id, now).await? {
+        return Ok(false);
+    }
+    session::revoke_all(txn, user_id).await?;
+    user_token::revoke_every_purpose(txn, user_id).await?;
+    // samples: claim unverified account
+    Ok(true)
 }
 
 /// Sessions of `user_id` ended: call it after the commit, wherever that happens (sign-out, a

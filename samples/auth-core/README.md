@@ -99,7 +99,7 @@ any sign-in method ──► auth::sign_in ──[samples: before sign in]──
                                                                            └ cookies + redirect to return-to (local paths only)
 ```
 
-Sign-in methods plug in through anchors in this sample's own files: `{# samples: sign in methods #}` / `sign in alternatives` in `templates/sessions/new.html`, `confirm second factor` / `confirm methods` / `confirm alternatives` in `templates/account/confirm.html`, `account fields` / `account load` / `account init` and `account sections` for the account page, `before sign in`, `step-up second factor`, `revoke everything` and `revoke other access` in `controllers/auth.rs`. That is how the samples combine without editing each other.
+Sign-in methods plug in through anchors in this sample's own files: `{# samples: sign in methods #}` / `sign in alternatives` in `templates/sessions/new.html`, `confirm second factor` / `confirm methods` / `confirm alternatives` in `templates/account/confirm.html`, `account fields` / `account load` / `account init` and `account sections` for the account page, `before sign in`, `step-up second factor`, `revoke everything`, `revoke other access` and `claim unverified account` (delete the method's credential when the address's owner claims an unverified account: pre-hijacking) in `controllers/auth.rs`. That is how the samples combine without editing each other.
 
 Emails go out through `state.background` (no job queue needed): the request returns immediately, the task mints its token and sends. `app.settle()` waits for them in tests.
 
