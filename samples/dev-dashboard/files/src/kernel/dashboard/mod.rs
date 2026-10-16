@@ -21,6 +21,7 @@
 //! before any state exists, and the SQL callback runs inside SeaORM without access to it.
 
 pub mod access;
+// samples: dashboard mods
 pub mod charts;
 pub mod cli;
 pub mod collector;

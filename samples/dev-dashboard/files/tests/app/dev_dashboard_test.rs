@@ -210,16 +210,19 @@ async fn the_dashboard_is_404_in_production_by_default() {
             .assert_status(StatusCode::NOT_FOUND);
         assert!(!HUB.enabled(), "production and test record nothing");
     }
-    // Asked for, but without an admin gate: still not mounted.
+    // Asked for, but without an admin gate: still not mounted. (With accounts, the accounts are
+    // the gate: mounted, and nobody signed in gets anything.)
     let app = TestApp::with_config(production(DashboardConfig {
         in_production: true,
         ..DashboardConfig::default()
     }))
     .await;
-    assert_eq!(
-        app.get("/admin/dashboard").await.status,
-        StatusCode::NOT_FOUND
-    );
+    let status = app.get("/admin/dashboard").await.status;
+    if dashboard::access::HAS_ACCOUNTS {
+        assert!(!status.is_success(), "{status}");
+    } else {
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
 }
 
 /// In production the read-only dashboard needs the admin password, and has no lab, no logs, no
@@ -277,6 +280,117 @@ async fn the_production_dashboard_needs_the_admin_password() {
 }
 
 /// Failed passwords are rate limited.
+/// The production view shows a trace's timings and normalized SQL, never its log events or span
+/// fields: those carry whatever the app logged (here an email address and an order total).
+#[tokio::test]
+async fn the_production_trace_page_hides_events_and_fields() {
+    use offrails_host::kernel::dashboard::trace::{self, EventRec, SpanRec, Trace};
+    let app = TestApp::with_config(production(gated())).await;
+    let t = Arc::new(Trace {
+        id: 4242,
+        at: chrono::Utc::now(),
+        method: "POST",
+        route: "/checkout",
+        path: "/checkout".into(),
+        status: 200,
+        dur_us: 1_000,
+        bytes: None,
+        request_id: String::new(),
+        spans: vec![SpanRec {
+            id: 1,
+            parent: None,
+            name: "charge_card",
+            target: "billing",
+            start_us: 10,
+            dur_us: 500,
+            fields: "customer=ada@example.com".into(),
+        }],
+        sql: Vec::new(),
+        events: vec![EventRec {
+            at_us: 20,
+            level: "INFO",
+            message: "charged ada@example.com 129.00 EUR".into(),
+            parent: Some(1),
+        }],
+        n_plus_one: Vec::new(),
+        statements: 0,
+        sql_us: 0,
+        dropped: 0,
+    });
+    lock(&HUB.traces).push(t.clone());
+    let right = basic(ADMIN_PASSWORD);
+    let page = app
+        .get_with_headers("/admin/dashboard/traces/4242", &[("authorization", &right)])
+        .await;
+    page.assert_ok()
+        .assert_contains("charge_card")
+        .assert_not_contains("ada@example.com")
+        .assert_not_contains("129.00");
+    // The development view keeps them: that's where the developer debugs.
+    let dev = trace::waterfall(&t, true);
+    assert!(
+        dev.iter()
+            .any(|r| r.detail.contains("charged ada@example.com"))
+    );
+    assert!(
+        dev.iter()
+            .any(|r| r.detail.contains("customer=ada@example.com"))
+    );
+}
+
+/// Behind a proxy without APP_TRUSTED_PROXY every client shares the proxy's address, so one
+/// person failing on purpose locks the admins out. That misconfiguration is logged, once.
+#[tokio::test]
+async fn an_untrusted_forwarded_for_header_warns_once() {
+    #[derive(Clone, Default)]
+    struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Captured {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+        type Writer = Captured;
+        fn make_writer(&'a self) -> Captured {
+            self.clone()
+        }
+    }
+    let logs = Captured::default();
+    let _guard = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_writer(logs.clone())
+            .with_max_level(tracing::Level::WARN)
+            .finish(),
+    );
+    let warnings = || {
+        String::from_utf8_lossy(&logs.0.lock().unwrap())
+            .matches("APP_TRUSTED_PROXY is off")
+            .count()
+    };
+    let app = TestApp::with_config(production(gated())).await;
+    let wrong = basic("not the password at all!");
+    app.get_with_headers("/admin/dashboard", &[("authorization", &wrong)])
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    assert_eq!(warnings(), 0, "no proxy header, no warning");
+    for _ in 0..3 {
+        app.get_with_headers(
+            "/admin/dashboard",
+            &[
+                ("authorization", &wrong),
+                ("x-forwarded-for", "203.0.113.7"),
+            ],
+        )
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    }
+    assert_eq!(warnings(), 1, "warned once");
+}
+
 #[tokio::test]
 async fn failed_dashboard_passwords_are_rate_limited() {
     let app = TestApp::with_config(production(gated())).await;

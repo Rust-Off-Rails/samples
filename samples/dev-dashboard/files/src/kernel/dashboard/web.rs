@@ -1184,7 +1184,9 @@ async fn trace_page(
             Flash::alert("That trace is no longer kept (the dashboard keeps the latest ones)."),
         );
     };
-    let rows = super::trace::waterfall(&t);
+    // SECURITY: the production view shows timings and normalized SQL, never log events or span
+    // fields (what the app logged: emails, ids, amounts) (test: the_production_trace_page_hides_events_and_fields)
+    let rows = super::trace::waterfall(&t, !mode.ro);
     let ticks = (0..=4)
         .map(|i| (i * 250, micros(t.dur_us * i / 4)))
         .collect();
@@ -2501,7 +2503,7 @@ struct ConfigPage {
     m: MemoryView,
 }
 
-/// Env var names shown on Config (values of secret-looking names are redacted). APP: add yours.
+/// Env var name prefixes listed on Config (values only for `ENV_VALUES_SHOWN`). APP: add yours.
 const ENV_SHOWN: &[&str] = &[
     "APP_",
     "DATABASE_",
@@ -2516,27 +2518,59 @@ const ENV_SHOWN: &[&str] = &[
     "RUST_BACKTRACE",
 ];
 
-/// Whether an env var's value is a secret.
-pub fn secret_name(name: &str) -> bool {
-    let n = name.to_ascii_uppercase();
-    [
-        "SECRET",
-        "TOKEN",
-        "PASSWORD",
-        "PASSWD",
-        "KEY",
-        "CREDENTIAL",
-        "PRIVATE",
-    ]
-    .iter()
-    .any(|w| n.contains(w))
+/// The env vars whose **values** Config shows: settings that are never secret. Every other
+/// listed variable shows only "set (redacted)" or "not set", whatever its name: a denylist of
+/// secret-looking words misses `SMTP_PASS`, `GITHUB_PAT`, `APP_PEPPER`, `STRIPE_SK`…
+/// APP: add a name here only when its value can never be a secret. URLs still lose their
+/// credentials and query string.
+pub const ENV_VALUES_SHOWN: &[&str] = &[
+    "APP_ENV",
+    "APP_URL",
+    "APP_REVISION",
+    "APP_BIND",
+    "APP_ALLOWED_HOSTS",
+    "APP_TRUSTED_PROXY",
+    "APP_DEV_HTTP_PORT",
+    "APP_SHUTDOWN_DRAIN_SECS",
+    "APP_INLINE_WORKER",
+    "APP_QUEUES",
+    "APP_JOBS_NODE",
+    "APP_JOBS_PRUNE_DAYS",
+    "APP_JOBS_SHUTDOWN_GRACE",
+    "APP_NODE",
+    "APP_CLUSTER",
+    "APP_MAGIC_LINK_ANY_BROWSER",
+    "APP_REALTIME_ORIGINS",
+    "APP_REALTIME_TRANSPORTS",
+    "APP_REALTIME_REVALIDATE_SECS",
+    "DATABASE_URL",
+    "DATABASE_POOL",
+    "TEST_DATABASE_URL",
+    "PORT",
+    "RUST_LOG",
+    "RUST_BACKTRACE",
+    "LOG_FORMAT",
+    "MAILER",
+    "MAIL_FROM",
+    "SMTP_URL",
+    "GITHUB_REPO",
+    "GITHUB_API_URL",
+    "DASHBOARD_IN_PRODUCTION",
+    "DASHBOARD_DEMO_HISTORY",
+    "DASHBOARD_GITHUB_FIXTURE",
+];
+
+/// Whether Config may show this env var's value (`ENV_VALUES_SHOWN`).
+pub fn value_shown(name: &str) -> bool {
+    ENV_VALUES_SHOWN.contains(&name)
 }
 
 /// An env var's value as Config shows it.
-// SECURITY: secrets show as "set (redacted)", URLs lose their credentials, and nothing outside
-// ENV_SHOWN is listed (HOME, USER and PATH name the machine) (test: config_redacts_secrets_and_credentials).
+// SECURITY: only allowlisted, never-secret names show a value; every other one is "set
+// (redacted)" or "not set"; URLs lose their credentials and query; nothing outside ENV_SHOWN is
+// listed (HOME, USER and PATH name the machine) (test: config_redacts_secrets_and_credentials).
 pub fn redact_env(name: &str, value: &str) -> String {
-    if secret_name(name) {
+    if !value_shown(name) {
         return if value.is_empty() {
             "not set".into()
         } else {
@@ -3247,6 +3281,25 @@ mod tests {
     #[test]
     fn config_redacts_secrets_and_credentials() {
         assert_eq!(redact_env("GITHUB_TOKEN", "ghp_abc"), "set (redacted)");
+        // Secrets whose names a denylist of words would miss: only allowlisted names show.
+        for (name, value) in [
+            ("SMTP_PASS", "hunter2hunter2"),
+            ("GITHUB_PAT", "github_pat_11ABCDEF"),
+            ("APP_PEPPER", "pepper-value"),
+            ("STRIPE_SK", "sk_live_abc"),
+            ("APP_TLS_KEY", "/etc/app/tls/key.pem"),
+        ] {
+            assert_eq!(redact_env(name, value), "set (redacted)", "{name}");
+        }
+        assert_eq!(redact_env("SMTP_PASS", ""), "not set");
+        assert_eq!(redact_env("APP_ENV", "development"), "development");
+        assert_eq!(
+            redact_env(
+                "SMTP_URL",
+                "smtps://mailer:s3cret@smtp.example.com:465?auth=plain"
+            ),
+            "smtps://smtp.example.com:465"
+        );
         assert_eq!(redact_env("APP_ADMIN_PASSWORD", ""), "not set");
         assert_eq!(
             redact_env(
