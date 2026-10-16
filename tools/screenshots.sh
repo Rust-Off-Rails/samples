@@ -3,6 +3,7 @@
 # Chrome: every screen, light and dark, desktop (1440x900) and mobile (390x844).
 #
 #   tools/screenshots.sh [sample…]     (needs Node >= 22.12 and pnpm; starts the demo if it isn't running)
+#   AXE=1 tools/screenshots.sh          also runs axe-core (WCAG 2.2 AA) on every shot
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
