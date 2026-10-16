@@ -36,6 +36,7 @@ The mailbox renders mail that the app (and, through it, anyone who can type into
 | Previews render in the same viewer and are never stored | `previews_render_in_the_same_viewer_and_are_never_stored` |
 | Agents get links and codes as JSON, filterable by recipient, subject and cursor | `the_json_endpoints_filter_and_carry_links_and_codes` |
 | The checks flag relative URLs, missing text parts, images without alt, Gmail clipping, scripts | `checks_flag_what_breaks_in_real_inboxes` |
+| The checks flag mail wider than 320 px (fixed widths no `max-width` reins in), and the seeded weekly digest's 496 px banner is flagged | `mail_that_overflows_a_320_px_screen_is_flagged`, `the_seeded_weekly_digest_overflows_at_320_px` |
 | The base target goes inside `<head>`, never before the doctype (quirks mode) | `the_base_goes_inside_head_and_never_before_the_doctype` |
 
 ## In a browser (not part of the test suite)
