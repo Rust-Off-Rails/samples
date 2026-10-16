@@ -1,0 +1,1486 @@
+//! The dev dashboard: every page, the live streams, the collectors, the detectors (each with its
+//! bug planted), and the controls in samples/dev-dashboard/CHECKS.md (each row names its test).
+//!
+//! The dashboard keeps its state in one process-wide hub. nextest runs every test in its own
+//! process, so tests never see each other's numbers; they still use paths and values of their own.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
+
+use axum::Router;
+use axum::body::Body;
+use axum::extract::State;
+use axum::http::{Request, StatusCode};
+use axum::middleware::from_fn;
+use axum::routing::{get, post};
+use base64::Engine;
+use http_body_util::BodyExt;
+use offrails_host::config::{AppEnv, Config, DashboardConfig};
+use offrails_host::kernel::dashboard::lab::{self, Plan};
+use offrails_host::kernel::dashboard::route_explorer::{self as rx, RouteDef};
+use offrails_host::kernel::dashboard::trace::DashboardLayer;
+use offrails_host::kernel::dashboard::{
+    self, HUB, collector, github, http, insights, lock, schema, sql, testruns,
+};
+use offrails_host::routes::Access;
+use offrails_host::state::AppState;
+use sea_orm::{ConnectionTrait, Statement};
+use tower::ServiceExt;
+use tracing_subscriber::layer::SubscriberExt;
+
+use crate::support::{TestApp, wait_until};
+
+async fn dev_app() -> TestApp {
+    TestApp::with_config(Config {
+        env: AppEnv::Development,
+        ..Config::test()
+    })
+    .await
+}
+
+const ADMIN_PASSWORD: &str = "correct horse battery staple";
+
+fn production(dashboard: DashboardConfig) -> Config {
+    Config {
+        env: AppEnv::Production,
+        app_url: "https://app.example.com".into(),
+        dashboard,
+        ..Config::test()
+    }
+}
+
+fn gated() -> DashboardConfig {
+    DashboardConfig {
+        in_production: true,
+        admin_password: Some(ADMIN_PASSWORD.into()),
+        ..DashboardConfig::default()
+    }
+}
+
+fn basic(password: &str) -> String {
+    format!(
+        "Basic {}",
+        base64::engine::general_purpose::STANDARD.encode(format!("admin:{password}"))
+    )
+}
+
+/// Reads SSE frames until one contains `needle`, or fails after `wait`.
+async fn next_event(body: &mut Body, needle: &str, wait: Duration) -> String {
+    let mut seen = String::new();
+    let deadline = tokio::time::Instant::now() + wait;
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let frame = tokio::time::timeout(left, body.frame())
+            .await
+            .unwrap_or_else(|_| panic!("no {needle:?} event; saw: {seen}"));
+        let Some(Ok(frame)) = frame else {
+            panic!("the stream ended; saw: {seen}")
+        };
+        if let Some(data) = frame.data_ref() {
+            seen.push_str(&String::from_utf8_lossy(data));
+            if let Some(at) = seen.find(needle) {
+                return seen[at..].to_owned();
+            }
+        }
+    }
+}
+
+/// The dashboard's layer behind development's log filter, for this test's thread.
+fn traced() -> tracing::subscriber::DefaultGuard {
+    tracing::subscriber::set_default(tracing_subscriber::registry().with(DashboardLayer).with(
+        tracing_subscriber::EnvFilter::new("info,offrails_host=debug,tower_http=debug"),
+    ))
+}
+
+/// Takes one collector sample, as the once-a-second loop does.
+fn sample(app: &TestApp) {
+    let mut c = collector::Collector::new();
+    let s = c.sample(app.db());
+    c.commit(s);
+}
+
+async fn count_orders(app: &TestApp) -> i64 {
+    app.db()
+        .query_one_raw(Statement::from_string(
+            app.db().get_database_backend(),
+            "SELECT COUNT(*) AS n FROM lab_orders",
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get("", "n")
+        .unwrap()
+}
+
+const PAGES: &[&str] = &[
+    "/dev/dashboard",
+    "/dev/dashboard/insights",
+    "/dev/dashboard/charts",
+    "/dev/dashboard/charts?range=24h",
+    "/dev/dashboard/requests",
+    "/dev/dashboard/routes",
+    "/dev/dashboard/traces",
+    "/dev/dashboard/sql",
+    "/dev/dashboard/logs",
+    "/dev/dashboard/schema",
+    "/dev/dashboard/tests",
+    "/dev/dashboard/github",
+    "/dev/dashboard/lab",
+    "/dev/dashboard/config",
+];
+
+// ---- pages --------------------------------------------------------------------------------------
+
+/// Every page renders and styles itself (its own CSS and JS, never app.css), with the sub-nav.
+#[tokio::test]
+async fn every_dashboard_page_renders_with_its_own_assets() {
+    let app = dev_app().await;
+    app.get("/dev/lab/orders").await.assert_ok();
+    sample(&app);
+    for path in PAGES {
+        app.get(path)
+            .await
+            .assert_ok()
+            .assert_contains("/static/kernel/dashboard.css?v=")
+            .assert_contains("/static/kernel/dashboard.js?v=")
+            .assert_contains("aria-label=\"Dashboard\"")
+            .assert_not_contains("/static/app.css");
+    }
+}
+
+/// The stylesheet follows the theme switch: light-dark() tokens, no prefers-color-scheme blocks.
+#[test]
+fn the_dashboard_stylesheet_follows_the_theme_switch() {
+    let css = std::fs::read_to_string("static/kernel/dashboard.css").unwrap();
+    assert!(!css.contains("prefers-color-scheme"));
+    assert!(css.contains("light-dark("));
+}
+
+/// The dashboard replaces the host's System and Routes tabs; their pages stay as the fallback.
+#[tokio::test]
+async fn the_dashboard_replaces_the_system_and_routes_tabs() {
+    let app = dev_app().await;
+    app.get("/dev")
+        .await
+        .assert_ok()
+        .assert_contains(r#"<a href="/dev/dashboard""#)
+        .assert_contains(r#"<a href="/dev/dashboard/routes""#)
+        .assert_not_contains(r#"<a href="/dev/system">System</a>"#)
+        .assert_not_contains(r#"<a href="/dev/routes">Routes</a>"#);
+    app.get("/dev/system").await.assert_ok();
+    app.get("/dev/routes").await.assert_ok();
+}
+
+/// Every dashboard response is no-store (pages, fragments, JSON, streams, redirects).
+#[tokio::test]
+async fn every_dashboard_response_is_no_store() {
+    let app = dev_app().await;
+    for path in PAGES
+        .iter()
+        .chain(&["/dev/dashboard.json", "/admin/dashboard", "/dev/lab/orders"])
+    {
+        let res = app.get(path).await;
+        assert_eq!(res.headers["cache-control"], "no-store", "{path}");
+    }
+    let (status, headers) = app
+        .request_head("/dev/dashboard/stream?view=overview", &[])
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["cache-control"], "no-store");
+    let res = app.post_form("/dev/dashboard/reset", &[]).await;
+    assert_eq!(res.headers["cache-control"], "no-store");
+}
+
+/// Development only: in production and test every dashboard route is the router's 404, and
+/// nothing is recorded.
+#[tokio::test]
+async fn the_dashboard_is_404_in_production_by_default() {
+    for config in [production(DashboardConfig::default()), Config::test()] {
+        let app = TestApp::with_config(config).await;
+        for path in
+            PAGES
+                .iter()
+                .chain(&["/admin/dashboard", "/dev/lab/orders", "/dev/dashboard.json"])
+        {
+            assert_eq!(app.get(path).await.status, StatusCode::NOT_FOUND, "{path}");
+        }
+        app.post_form("/dev/dashboard/lab/scenario", &[("scenario", "panic")])
+            .await
+            .assert_status(StatusCode::NOT_FOUND);
+        assert!(!HUB.enabled(), "production and test record nothing");
+    }
+    // Asked for, but without an admin gate: still not mounted.
+    let app = TestApp::with_config(production(DashboardConfig {
+        in_production: true,
+        ..DashboardConfig::default()
+    }))
+    .await;
+    assert_eq!(
+        app.get("/admin/dashboard").await.status,
+        StatusCode::NOT_FOUND
+    );
+}
+
+/// In production the read-only dashboard needs the admin password, and has no lab, no logs, no
+/// EXPLAIN and no parameters.
+#[tokio::test]
+async fn the_production_dashboard_needs_the_admin_password() {
+    let app = TestApp::with_config(production(gated())).await;
+    assert!(
+        HUB.enabled(),
+        "the read-only dashboard records in production"
+    );
+    let res = app.get("/admin/dashboard").await;
+    res.assert_status(StatusCode::UNAUTHORIZED);
+    assert!(
+        res.headers["www-authenticate"]
+            .to_str()
+            .unwrap()
+            .starts_with("Basic")
+    );
+    let wrong = basic("wrong password, long enough");
+    app.get_with_headers("/admin/dashboard", &[("authorization", &wrong)])
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    let right = basic(ADMIN_PASSWORD);
+    let ok = [("authorization", right.as_str())];
+    app.get_with_headers("/admin/dashboard", &ok)
+        .await
+        .assert_ok()
+        .assert_text("Read-only production view")
+        .assert_not_contains("/dev/dashboard/lab")
+        .assert_not_contains("/dev/dashboard/logs");
+    app.get_with_headers("/admin/dashboard/sql", &ok)
+        .await
+        .assert_ok()
+        .assert_not_contains("Explain")
+        .assert_not_contains("params:");
+    for path in [
+        "/dev/dashboard",
+        "/dev/dashboard/lab",
+        "/admin/dashboard/logs",
+        "/admin/dashboard/schema",
+    ] {
+        assert_eq!(
+            app.get_with_headers(path, &ok).await.status,
+            StatusCode::NOT_FOUND,
+            "{path}"
+        );
+    }
+    assert!(!offrails_host::config::admin_password_ok(Some("short")));
+    assert!(offrails_host::config::admin_password_ok(Some(
+        ADMIN_PASSWORD
+    )));
+    assert!(offrails_host::config::valid_repo("example-org/example-app"));
+    assert!(!offrails_host::config::valid_repo("../../etc"));
+}
+
+/// Failed passwords are rate limited.
+#[tokio::test]
+async fn failed_dashboard_passwords_are_rate_limited() {
+    let app = TestApp::with_config(production(gated())).await;
+    let bad = basic("not the password at all!");
+    let mut last = StatusCode::OK;
+    for _ in 0..12 {
+        last = app
+            .get_with_headers("/admin/dashboard", &[("authorization", &bad)])
+            .await
+            .status;
+    }
+    assert_eq!(last, StatusCode::TOO_MANY_REQUESTS);
+}
+
+// ---- requests, SQL, N+1 -------------------------------------------------------------------------
+
+/// Requests are grouped by their route pattern with status classes, percentiles and bytes; the
+/// dashboard's own pages are not recorded.
+#[tokio::test]
+async fn requests_are_recorded_per_route_with_percentiles() {
+    let app = dev_app().await;
+    lab::seed(app.db(), 5).await.unwrap();
+    for _ in 0..4 {
+        app.get("/dev/lab/orders").await.assert_ok();
+    }
+    app.get("/dev/lab/error?status=503")
+        .await
+        .assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    app.get("/dev/lab/error?status=404")
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    app.get("/dev/dashboard").await.assert_ok();
+    let rows = lock(&HUB.http).rows();
+    let orders = rows.iter().find(|r| r.route == "/dev/lab/orders").unwrap();
+    assert_eq!((orders.count, orders.s2), (4, 4));
+    assert!(orders.p50 > 0 && orders.p95 >= orders.p50 && orders.p99 >= orders.p95);
+    assert!(orders.bytes > 0, "bytes are counted, streamed or not");
+    let errors = rows.iter().find(|r| r.route == "/dev/lab/error").unwrap();
+    assert_eq!((errors.s4, errors.s5), (1, 1));
+    assert!(rows.iter().all(|r| !r.route.starts_with("/dev/dashboard")));
+    app.get("/dev/dashboard/requests?sort=errors")
+        .await
+        .assert_ok()
+        .assert_contains("/dev/lab/orders")
+        .assert_contains("/dev/lab/error");
+}
+
+/// An N+1 is flagged with its route, its fingerprint and the trace that shows it.
+#[tokio::test]
+async fn an_n_plus_one_is_flagged_with_its_route_and_trace() {
+    let app = dev_app().await;
+    lab::seed(app.db(), 12).await.unwrap();
+    app.get("/dev/lab/orders/n-plus-one").await.assert_ok();
+    app.get("/dev/lab/orders").await.assert_ok();
+    let (route, count, trace) = {
+        let s = lock(&HUB.sql);
+        let n = s.n_plus_one();
+        assert_eq!(n.len(), 1, "only the N+1 page is flagged");
+        (n[0].route, n[0].count, n[0].trace)
+    };
+    assert_eq!(route, "/dev/lab/orders/n-plus-one");
+    assert_eq!(count, 12, "one item query per order");
+    app.get("/dev/dashboard/sql")
+        .await
+        .assert_contains("id=\"n-plus-one\"")
+        .assert_contains(&format!("/dev/dashboard/traces/{trace}"));
+    app.get(&format!("/dev/dashboard/traces/{trace}"))
+        .await
+        .assert_ok()
+        .assert_text("This request ran")
+        .assert_contains("12×");
+}
+
+/// Statements are grouped by fingerprint (literals stripped), with count, p95 and max.
+#[tokio::test]
+async fn sql_is_grouped_by_fingerprint() {
+    let app = dev_app().await;
+    lab::seed(app.db(), 3).await.unwrap();
+    for _ in 0..3 {
+        app.get("/dev/lab/orders").await.assert_ok();
+    }
+    let rows = lock(&HUB.sql).rows(sql::Sort::Count);
+    let orders = rows
+        .iter()
+        .find(|r| r.sql.contains("FROM \"lab_orders\"") && r.sql.contains("LIMIT"))
+        .expect("the orders query");
+    assert_eq!(orders.count, 3);
+    assert!(orders.max >= orders.p95 && orders.routes.contains(&"/dev/lab/orders"));
+    app.get(&format!("/dev/dashboard/sql/{}", orders.id))
+        .await
+        .assert_ok()
+        .assert_text("Explain");
+}
+
+/// Parameter values never reach a page: types and lengths only.
+#[tokio::test]
+async fn sql_parameter_values_never_reach_any_page() {
+    let app = dev_app().await;
+    let secret = "s3cret-token-value@example.com";
+    let sql_text = if app.on_sqlite() {
+        "SELECT COUNT(*) AS n FROM lab_orders WHERE customer = ?"
+    } else {
+        "SELECT COUNT(*) AS n FROM lab_orders WHERE customer = $1"
+    };
+    app.db()
+        .query_one_raw(Statement::from_sql_and_values(
+            app.db().get_database_backend(),
+            sql_text,
+            [secret.into()],
+        ))
+        .await
+        .unwrap();
+    let id = lock(&HUB.sql)
+        .rows(sql::Sort::Recent)
+        .into_iter()
+        .find(|r| r.sql.contains("WHERE customer = ?"))
+        .expect("recorded")
+        .id;
+    for path in [
+        "/dev/dashboard/sql".to_owned(),
+        format!("/dev/dashboard/sql/{id}"),
+        "/dev/dashboard.json".to_owned(),
+    ] {
+        app.get(&path)
+            .await
+            .assert_ok()
+            .assert_not_contains(secret)
+            .assert_not_contains("s3cret");
+    }
+    app.get(&format!("/dev/dashboard/sql/{id}"))
+        .await
+        .assert_text("text (30 chars)");
+}
+
+/// EXPLAIN runs for recorded SELECTs only and writes nothing.
+#[tokio::test]
+async fn explain_runs_for_selects_only() {
+    let app = dev_app().await;
+    lab::seed(app.db(), 3).await.unwrap();
+    app.get("/dev/lab/orders").await.assert_ok();
+    let select = lock(&HUB.sql)
+        .rows(sql::Sort::Count)
+        .into_iter()
+        .find(|r| r.sql.starts_with("SELECT") && r.sql.contains("lab_orders"))
+        .unwrap();
+    let page = app
+        .post_form(&format!("/dev/dashboard/sql/{}/explain", select.id), &[])
+        .await;
+    page.assert_ok();
+    let plan = page
+        .body
+        .split("class=\"code plan\"")
+        .nth(1)
+        .expect("a plan");
+    assert!(plan.contains("lab_orders"), "{plan}");
+    app.db()
+        .execute_raw(Statement::from_string(
+            app.db().get_database_backend(),
+            "UPDATE lab_orders SET status = status WHERE id < 0",
+        ))
+        .await
+        .unwrap();
+    let update = lock(&HUB.sql)
+        .rows(sql::Sort::Recent)
+        .into_iter()
+        .find(|r| r.sql.starts_with("UPDATE"))
+        .unwrap();
+    assert!(!update.select);
+    let fp = sql::parse_hex(&update.id).unwrap();
+    assert_eq!(
+        sql::explain(app.db(), fp).await,
+        Err(sql::ExplainError::NotExplainable)
+    );
+    app.post_form(&format!("/dev/dashboard/sql/{}/explain", update.id), &[])
+        .await
+        .assert_ok()
+        .assert_text("Only SELECTs");
+    assert_eq!(count_orders(&app).await, 3, "nothing was written");
+}
+
+// ---- traces and logs ----------------------------------------------------------------------------
+
+/// The waterfall shows the request, its spans (handler, render), its SQL under its span, and its
+/// events (a job enqueued), each with start and duration.
+#[tokio::test]
+async fn the_trace_waterfall_shows_spans_sql_and_events() {
+    let _guard = traced();
+    let app = dev_app().await;
+    lab::seed(app.db(), 3).await.unwrap();
+    app.get("/dev/lab/orders").await.assert_ok();
+    let t = lock(&HUB.traces)
+        .list(false)
+        .into_iter()
+        .find(|t| t.route == "/dev/lab/orders")
+        .expect("a trace");
+    let names: Vec<&str> = t.spans.iter().map(|s| s.name).collect();
+    assert!(
+        names.contains(&"load_orders") && names.contains(&"render"),
+        "{names:?}"
+    );
+    let load = t.spans.iter().find(|s| s.name == "load_orders").unwrap();
+    // Development's pending-migrations guard reads seaql_migrations first; the page's own two
+    // queries hang under its span.
+    assert_eq!(
+        t.sql.iter().filter(|q| q.parent == Some(load.id)).count(),
+        2,
+        "SQL hangs under its span"
+    );
+    assert!(t.events.iter().any(|e| e.message.contains("enqueued")));
+    app.get(&format!("/dev/dashboard/traces/{}", t.id))
+        .await
+        .assert_ok()
+        .assert_contains("wf-request")
+        .assert_contains("wf-span")
+        .assert_contains("wf-sql")
+        .assert_contains("wf-job")
+        .assert_contains("<caption class=\"visually-hidden\">Spans, SQL statements and events");
+    app.get("/dev/dashboard/traces/999999999")
+        .await
+        .assert_redirect_to("/dev/dashboard/traces");
+}
+
+/// The live log tail: filters by level, target and text; new lines arrive over SSE.
+#[tokio::test]
+async fn the_log_tail_streams_lines_and_filters() {
+    let _guard = traced();
+    let app = dev_app().await;
+    tracing::warn!(target: "billing", order = 42, "card declined (fixture)");
+    tracing::info!(target: "billing", "invoice sent (fixture)");
+    app.get("/dev/dashboard/logs?level=warn&target=billing")
+        .await
+        .assert_ok()
+        .assert_text("card declined (fixture)")
+        .assert_not_contains("invoice sent");
+    let router = offrails_host::routes::router(app.state.clone()).unwrap();
+    let res = router
+        .oneshot(
+            Request::get("/dev/dashboard/logs/stream?q=deliberate")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.headers()["content-type"], "text/event-stream");
+    let mut body = res.into_body();
+    next_event(&mut body, ": live", Duration::from_secs(5)).await;
+    app.get("/dev/lab/error?status=500").await;
+    let event = next_event(&mut body, "event: log", Duration::from_secs(5)).await;
+    assert!(event.contains("deliberate"), "{event}");
+    assert!(!event.contains("invoice sent"));
+}
+
+/// A password or token logged as a field shows as [redacted] in the live tail.
+#[tokio::test]
+async fn secrets_logged_as_fields_never_reach_the_tail() {
+    let _guard = traced();
+    let app = dev_app().await;
+    tracing::info!(
+        password = "hunter2-hunter2",
+        reset_token = "tok-123456",
+        user = 7,
+        "signed in (fixture)"
+    );
+    app.get("/dev/dashboard/logs")
+        .await
+        .assert_ok()
+        .assert_text("password=[redacted]")
+        .assert_not_contains("hunter2")
+        .assert_not_contains("tok-123456")
+        .assert_text("user=7");
+}
+
+// ---- live: collector, charts, stream ------------------------------------------------------------
+
+/// The collector samples memory, CPU, the pool and Tokio; the charts show them, each with a data
+/// table as its text alternative.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_collector_feeds_the_charts_and_cards() {
+    let app = dev_app().await;
+    app.get("/").await.assert_ok();
+    sample(&app);
+    let s = lock(&HUB.series).latest().expect("a sample");
+    assert!(s.rss > 0 && s.workers == 2 && s.tasks >= 1, "{s:?}");
+    assert!(s.pool_max >= 1 && s.pool_size >= 1, "{s:?}");
+    let charts = app.get("/dev/dashboard/charts?range=5m").await;
+    charts.assert_ok();
+    for id in [
+        "chart-memory",
+        "chart-cpu",
+        "chart-req",
+        "chart-latency",
+        "chart-errors",
+        "chart-pool",
+        "chart-tasks",
+    ] {
+        charts.assert_contains(&format!("id=\"{id}\""));
+    }
+    assert!(charts.body.matches("<summary>Data table</summary>").count() >= 7);
+    assert!(
+        charts
+            .body
+            .contains("role=\"img\" aria-label=\"Memory (resident): RSS now")
+    );
+    app.get("/dev/dashboard")
+        .await
+        .assert_text("Memory")
+        .assert_text("Tokio tasks");
+}
+
+/// Charts zoom into a range, mark events (a load-lab run, the demo's deploy), carry a heatmap and a
+/// "demo data" badge over synthetic history, and a minute drills into its traces.
+#[tokio::test]
+async fn charts_zoom_annotate_and_drill_into_traces() {
+    let app = dev_app().await;
+    let now = chrono::Utc::now().timestamp();
+    dashboard::demo::backfill(&mut lock(&HUB.series), now);
+    lab::seed(app.db(), 3).await.unwrap();
+    app.get("/dev/lab/orders").await.assert_ok();
+    let charts = app.get("/dev/dashboard/charts?range=1h").await;
+    charts
+        .assert_ok()
+        .assert_text("demo data")
+        .assert_contains("id=\"chart-heatmap\"")
+        .assert_text("deploy v1.4.0 (demo data)")
+        .assert_contains("class=\"mark mark-deploy\"")
+        .assert_contains("data-drill");
+    assert!(
+        !charts.body.contains("req/s <b>0/s"),
+        "legends summarize the window"
+    );
+    let from = now - 600;
+    app.get(&format!("/dev/dashboard/charts?from={from}&to={now}"))
+        .await
+        .assert_ok()
+        .assert_text("Reset zoom")
+        .assert_text("UTC");
+    let minute = now.div_euclid(60);
+    app.get(&format!("/dev/dashboard/traces?minute={minute}"))
+        .await
+        .assert_ok()
+        .assert_text("/dev/lab/orders");
+    app.get(&format!("/dev/dashboard/traces?minute={}", minute - 30))
+        .await
+        .assert_ok()
+        .assert_text("No traces match");
+}
+
+/// The live stream sends a page's fragments as named events.
+#[tokio::test]
+async fn the_live_stream_sends_fragments() {
+    let app = dev_app().await;
+    sample(&app);
+    let router = offrails_host::routes::router(app.state.clone()).unwrap();
+    let res = router
+        .oneshot(
+            Request::get("/dev/dashboard/stream?view=overview")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()["content-type"], "text/event-stream");
+    let mut body = res.into_body();
+    next_event(&mut body, ": live", Duration::from_secs(5)).await;
+    let event = next_event(&mut body, "event: cards", Duration::from_secs(5)).await;
+    assert!(event.contains("card-value"), "{event}");
+}
+
+/// Whatever the traffic, every ring and map stays within its size.
+#[tokio::test]
+async fn the_dashboard_stays_within_its_memory_bound() {
+    let _app = dev_app().await;
+    for i in 0..20_000_u64 {
+        let route = if i % 2 == 0 { http::UNMATCHED } else { "/" };
+        let ctx = http::RequestCtx::new("GET", route, &format!("/scan/{i}?x={i}"), String::new());
+        for s in 0..3 {
+            ctx.push_span(dashboard::trace::SpanRec {
+                id: s,
+                parent: None,
+                name: "span",
+                target: "test",
+                start_us: 0,
+                dur_us: 10,
+                fields: "x".repeat(100),
+            });
+        }
+        http::finish(&ctx, if i % 7 == 0 { 500 } else { 200 }, Some(100));
+    }
+    for i in 0..5_000 {
+        let stmt = Statement::from_string(
+            sea_orm::DbBackend::Sqlite,
+            format!("SELECT * FROM t{i} WHERE a = 1"),
+        );
+        sql::record(&sea_orm::metric::Info {
+            elapsed: Duration::from_micros(5),
+            statement: &stmt,
+            failed: false,
+        });
+        dashboard::trace::push_log(dashboard::trace::LogLine {
+            id: i,
+            at: chrono::Utc::now(),
+            level: "INFO",
+            target: "t".into(),
+            message: "m".repeat(200),
+            fields: String::new(),
+            trace: None,
+            request: None,
+        });
+        insights::record_csp(
+            format!(r#"{{"csp-report":{{"document-uri":"http://localhost/p{i}","violated-directive":"script-src","blocked-uri":"inline"}}}}"#)
+                .as_bytes(),
+        );
+    }
+    assert!(lock(&HUB.http).len() <= offrails_host::routes::ROUTES.len() * 2 + 2);
+    assert!(lock(&HUB.sql).len() <= sql::MAX_FINGERPRINTS);
+    let (recent, notable) = lock(&HUB.traces).lens();
+    assert!(recent <= dashboard::trace::RECENT && notable <= dashboard::trace::NOTABLE);
+    assert!(lock(&HUB.logs).len() <= dashboard::trace::LOG_LINES);
+    assert!(lock(&HUB.insights.csp).len() <= insights::MAX_CSP);
+    assert!(lock(&HUB.http).not_found_list().len() <= http::MAX_NOT_FOUND);
+    let bytes = HUB.approx_bytes();
+    assert!(
+        bytes < 32 * 1024 * 1024,
+        "the dashboard holds {bytes} bytes"
+    );
+}
+
+/// The middleware adds little to a request: a trivial route behind it alone, recording on and
+/// off on alternate requests (so machine load hits both the same), compared by median. (A debug
+/// build here; the README has release numbers.)
+#[tokio::test]
+async fn the_middleware_overhead_is_small() {
+    let _app = dev_app().await;
+    let router: Router = Router::new()
+        .route("/", get(|| async { "ok" }))
+        .layer(from_fn(http::middleware));
+    let (mut on, mut off) = (Vec::new(), Vec::new());
+    for i in 0..4_000 {
+        let recording = i % 2 == 0;
+        if recording {
+            HUB.enable(true);
+        } else {
+            HUB.disable();
+        }
+        let started = Instant::now();
+        let res = router
+            .clone()
+            .oneshot(Request::get("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let _ = res.into_body().collect().await;
+        let ns = started.elapsed().as_nanos() as u64;
+        if i >= 400 {
+            if recording { on.push(ns) } else { off.push(ns) }
+        }
+    }
+    HUB.enable(true);
+    on.sort_unstable();
+    off.sort_unstable();
+    let (on, off) = (on[on.len() / 2], off[off.len() / 2]);
+    let overhead_us = (on as f64 - off as f64) / 1000.0;
+    println!(
+        "dashboard middleware overhead: {overhead_us:.1} µs per request (median; on {on} ns, off {off} ns)"
+    );
+    // A debug build is ~10x slower than release (where it measures a few µs; see the README).
+    let limit = if cfg!(debug_assertions) { 50.0 } else { 10.0 };
+    assert!(
+        overhead_us < limit,
+        "the middleware adds {overhead_us:.1} µs per request (limit {limit})"
+    );
+}
+
+// ---- load lab -----------------------------------------------------------------------------------
+
+/// The generator only ever requests GET routes of this app on its own address: no URL, no other
+/// host, no streams, and the caps hold.
+#[tokio::test]
+async fn traffic_only_targets_this_app() {
+    let app = dev_app().await;
+    for bad in [
+        "http://evil.example/",
+        "//evil.example/x",
+        "/\\evil",
+        "/wp-login.php",
+        "/dev/mailbox/events",
+        "/dev/dashboard",
+        "/dev/dashboard/lab",
+        "/dev/dashboard/stream",
+        "/dev/csp-reports",
+        "/ x",
+    ] {
+        assert!(lab::plan(&[bad.to_owned()], 10, 5).is_err(), "{bad}");
+    }
+    let ok = vec!["/dev/lab/orders".to_owned()];
+    assert!(lab::plan(&ok, 10, 5).is_ok());
+    assert!(lab::plan(&ok, lab::MAX_RPS + 1, 5).is_err());
+    assert!(lab::plan(&ok, 10, lab::MAX_SECS + 1).is_err());
+    assert!(lab::plan(&ok, 0, 5).is_err());
+    assert!(lab::plan(&[], 10, 5).is_err());
+    app.post_form(
+        "/dev/dashboard/lab/traffic",
+        &[
+            ("paths", "https://evil.example/"),
+            ("rps", "10"),
+            ("secs", "1"),
+        ],
+    )
+    .await
+    .assert_redirect_to("/dev/dashboard/lab");
+    assert!(HUB.lab.current().is_none(), "nothing ran");
+}
+
+/// The generator runs a plan in process (no listener in tests) and the dashboard sees every
+/// request; a scenario lights up its panel.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_load_lab_runs_traffic_and_scenarios() {
+    let app = dev_app().await;
+    lab::seed(app.db(), 20).await.unwrap();
+    app.post_form(
+        "/dev/dashboard/lab/traffic",
+        // WHY: a route without SQL: the test database has one connection, and 32 requests in
+        // flight on it would measure the pool, not the generator.
+        &[("paths", "/robots.txt"), ("rps", "40"), ("secs", "1")],
+    )
+    .await
+    .assert_redirect_to("/dev/dashboard/lab");
+    wait_until("the run finishes", async || {
+        HUB.lab.current().is_some_and(|r| !r.running())
+    })
+    .await;
+    let run = HUB.lab.current().unwrap();
+    assert_eq!(run.ok.load(Ordering::Relaxed), 40);
+    let hits: u64 = lock(&HUB.http)
+        .rows()
+        .iter()
+        .filter(|r| r.route == "/robots.txt")
+        .map(|r| r.count)
+        .sum();
+    assert_eq!(hits, 40);
+    app.get("/dev/dashboard/lab")
+        .await
+        .assert_ok()
+        .assert_text("40 of 40");
+    app.post_form("/dev/dashboard/lab/scenario", &[("scenario", "panic")])
+        .await
+        .assert_redirect_to("/dev/dashboard/logs?level=error");
+    wait_until("the panic is recorded", async || {
+        lock(&HUB.http)
+            .rows()
+            .iter()
+            .any(|r| r.route == "/dev/lab/panic" && r.s5 == 1)
+    })
+    .await;
+    app.post_form("/dev/dashboard/lab/scenario", &[("scenario", "nonsense")])
+        .await
+        .assert_redirect_to("/dev/dashboard/lab");
+}
+
+/// The memory spike allocates, holds, then frees; one at a time.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_memory_spike_is_freed() {
+    let _app = dev_app().await;
+    assert!(lab::memory_spike(8, Duration::from_millis(100)));
+    assert!(!lab::memory_spike(8, Duration::from_millis(100)));
+    wait_until("the spike ends", async || {
+        !HUB.lab.spiking.load(Ordering::SeqCst)
+    })
+    .await;
+    assert!(lock(&HUB.lab.spike_until).is_none());
+}
+
+/// `app bench` drives a running server over the network.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bench_drives_a_running_server() {
+    let app = dev_app().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let router = offrails_host::routes::router(app.state.clone()).unwrap();
+    tokio::spawn(async move { axum::serve(listener, router).await });
+    let plan = Plan {
+        paths: vec!["/robots.txt".into()],
+        rps: 40,
+        secs: 1,
+    };
+    let run = dashboard::cli::bench_plan(&format!("http://{addr}"), "bench", plan).await;
+    assert_eq!(run.ok.load(Ordering::Relaxed), 40);
+    assert!(
+        lock(&HUB.http)
+            .rows()
+            .iter()
+            .any(|r| r.route == "/robots.txt" && r.count == 40)
+    );
+}
+
+// ---- insights -----------------------------------------------------------------------------------
+
+/// Insights rank findings with evidence, a fix, the guide and the page that proves it; a finding
+/// can be dismissed for the session.
+#[tokio::test]
+async fn insights_rank_findings_and_can_be_dismissed() {
+    let app = dev_app().await;
+    lab::seed(app.db(), 8).await.unwrap();
+    app.get("/dev/lab/orders/n-plus-one").await.assert_ok();
+    let page = app.get("/dev/dashboard/insights").await;
+    page.assert_ok()
+        .assert_text("N+1 on /dev/lab/orders/n-plus-one")
+        .assert_contains(".offrails/guides/models.md#associations")
+        .assert_contains("https://rustoffrails.org/docs/models#associations");
+    let id = page
+        .body
+        .split("name=\"id\" value=\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap()
+        .to_owned();
+    app.post_form("/dev/dashboard/insights/dismiss", &[("id", &id)])
+        .await
+        .assert_redirect_to("/dev/dashboard/insights");
+    app.get("/dev/dashboard/insights")
+        .await
+        .assert_not_contains(&format!("finding-{id}"))
+        .assert_text("dismissed");
+    app.post_form("/dev/dashboard/insights/dismiss", &[("restore", "1")])
+        .await;
+    app.get("/dev/dashboard/insights")
+        .await
+        .assert_contains(&format!("finding-{id}"));
+}
+
+/// A foreign key without an index is found from the schema, on both databases.
+#[tokio::test]
+async fn an_unindexed_foreign_key_is_found() {
+    let app = dev_app().await;
+    let db = app.db();
+    db.execute_unprepared("CREATE TABLE planted_parents (id BIGINT PRIMARY KEY)")
+        .await
+        .unwrap();
+    db.execute_unprepared(
+        "CREATE TABLE planted_children (id BIGINT PRIMARY KEY, parent_id BIGINT REFERENCES planted_parents (id))",
+    )
+    .await
+    .unwrap();
+    let t = schema::table(db, "planted_children").await.unwrap();
+    assert_eq!(t.fks.len(), 1);
+    assert_eq!(t.unindexed_fks().len(), 1);
+    let items = schema::table(db, "lab_order_items").await.unwrap();
+    assert!(
+        items.unindexed_fks().is_empty(),
+        "the lab's FK has its index"
+    );
+    let f = insights::findings(&app.state).await;
+    assert!(
+        f.iter()
+            .any(|f| f.title == "No index on planted_children.parent_id"),
+        "{:?}",
+        f.iter().map(|f| &f.title).collect::<Vec<_>>()
+    );
+}
+
+/// CSP reports are collected (both report formats) without query strings or fragments, and only
+/// development's CSP points at the endpoint.
+#[tokio::test]
+async fn csp_reports_are_collected_without_query_strings() {
+    let app = dev_app().await;
+    let res = app
+        .post_form_with_headers(
+            "/dev/csp-reports",
+            &[],
+            &[("content-type", "application/csp-report")],
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::NO_CONTENT);
+    let legacy = r#"{"csp-report":{"document-uri":"http://localhost:3000/books?token=abc#x","violated-directive":"script-src 'self'","effective-directive":"script-src","blocked-uri":"inline","source-file":"http://localhost:3000/books?token=abc","line-number":12}}"#;
+    assert_eq!(insights::record_csp(legacy.as_bytes()), 1);
+    let modern = r#"[{"type":"csp-violation","body":{"documentURL":"http://localhost:3000/cart?session=xyz","effectiveDirective":"style-src-attr","blockedURL":"inline","sourceFile":"","lineNumber":0}}]"#;
+    assert_eq!(insights::record_csp(modern.as_bytes()), 1);
+    app.get("/dev/dashboard/insights")
+        .await
+        .assert_ok()
+        .assert_text("CSP blocked inline on /books")
+        .assert_text("/cart")
+        .assert_not_contains("token=abc")
+        .assert_not_contains("session=xyz");
+    let csp = app.get("/").await.headers["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(csp.ends_with("report-uri /dev/csp-reports"), "{csp}");
+    let prod = TestApp::with_config(production(DashboardConfig::default())).await;
+    let csp = prod.get("/").await.headers["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(!csp.contains("report-uri"), "{csp}");
+}
+
+// ---- routes explorer (each detector with its bug planted) ---------------------------------------
+
+fn def(method: &'static str, path: &'static str, access: Access) -> RouteDef {
+    RouteDef {
+        method,
+        path,
+        handler: "planted::handler",
+        access,
+    }
+}
+
+/// A mutating route outside the CSRF layer is spotted, and the probe never runs its handler.
+#[tokio::test]
+async fn a_mutating_route_without_csrf_is_spotted() {
+    let ran = Arc::new(AtomicBool::new(false));
+    let flag = ran.clone();
+    let unprotected: Router = Router::new().route(
+        "/planted/delete",
+        post(move || {
+            flag.store(true, Ordering::SeqCst);
+            async { "deleted" }
+        }),
+    );
+    let routes = [def("POST", "/planted/delete", Access::User)];
+    assert_eq!(
+        rx::without_csrf(&unprotected, &routes).await,
+        ["POST /planted/delete"]
+    );
+    assert!(
+        !ran.load(Ordering::SeqCst),
+        "the probe never reaches the handler"
+    );
+    let app = dev_app().await;
+    let router = offrails_host::routes::router(app.state.clone()).unwrap();
+    assert!(rx::without_csrf(&router, &rx::table()).await.is_empty());
+}
+
+/// Admin and dev paths without a gate are spotted, by the table and by a production router.
+#[tokio::test]
+async fn ungated_admin_and_dev_paths_are_spotted() {
+    let routes = [
+        def("GET", "/admin/reports", Access::Public),
+        def("GET", "/dev/tools", Access::User),
+        def("GET", "/admin/ok", Access::Admin),
+    ];
+    assert_eq!(
+        rx::ungated(&routes),
+        ["GET /admin/reports", "GET /dev/tools"]
+    );
+    let open: Router = Router::new().route("/admin/ok", get(|| async { "secret numbers" }));
+    assert_eq!(rx::open_to_anyone(&open, &routes).await, ["GET /admin/ok"]);
+    assert!(rx::ungated(&rx::table()).is_empty());
+}
+
+/// A GET that writes to the database is spotted from the SQL it ran.
+#[tokio::test]
+async fn a_get_that_writes_is_spotted() {
+    let app = dev_app().await;
+    async fn writes(State(state): State<AppState>) -> &'static str {
+        state
+            .db
+            .execute_raw(Statement::from_string(
+                state.db.get_database_backend(),
+                "UPDATE lab_orders SET status = 'seen' WHERE id < 0",
+            ))
+            .await
+            .unwrap();
+        "ok"
+    }
+    let planted: Router = Router::new()
+        .route("/planted/visit", get(writes))
+        .layer(from_fn(http::middleware))
+        .with_state(app.state.clone());
+    let res = planted
+        .oneshot(Request::get("/planted/visit").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let writes: Vec<String> = lock(&HUB.http)
+        .get_writes()
+        .iter()
+        .map(|w| w.sql.to_string())
+        .collect();
+    assert_eq!(writes, ["UPDATE lab_orders SET status = ? WHERE id < ?"]);
+    lab::seed(app.db(), 2).await.unwrap();
+    app.get("/dev/lab/orders").await.assert_ok();
+    assert_eq!(
+        lock(&HUB.http).get_writes().len(),
+        1,
+        "the lab's pages only read"
+    );
+}
+
+/// 404s are listed with the route they probably meant and where the link was (a path or a host,
+/// never a query string).
+#[tokio::test]
+async fn not_found_paths_keep_the_nearest_route_and_a_safe_referrer() {
+    let app = dev_app().await;
+    app.get_with_headers(
+        "/dev/lab/ordrs",
+        &[("referer", "http://localhost:3000/dev/lab/orders?token=abc")],
+    )
+    .await
+    .assert_status(StatusCode::NOT_FOUND);
+    app.get("/old-links/q8Vw3nRt7yXz2KpL9mBc4HdF6sJa1GeU")
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    app.get_with_headers(
+        "/wp-login.php",
+        &[("referer", "https://scanner.example/path?q=1")],
+    )
+    .await;
+    app.get("/dev/dashboard/routes")
+        .await
+        .assert_ok()
+        .assert_contains("GET /dev/lab/ordrs")
+        .assert_contains("/dev/lab/orders</td>")
+        .assert_contains("scanner.example")
+        .assert_not_contains("token=abc")
+        .assert_not_contains("q=1")
+        .assert_not_contains("q8Vw3nRt7yXz2KpL9mBc4HdF6sJa1GeU")
+        .assert_text("/old-links/[redacted]");
+    assert_eq!(http::referrer_of("https://x.example/a/b?c=d"), "x.example");
+    assert_eq!(
+        http::referrer_of("http://localhost:3000/books/1?s=1"),
+        "/books/1"
+    );
+}
+
+/// Overlapping patterns, routes no test mentions, and routes missing from docs/routes.md.
+#[tokio::test]
+async fn overlaps_untested_and_undocumented_routes_are_spotted() {
+    let routes = [
+        def("GET", "/posts/{id}", Access::Public),
+        def("GET", "/posts/new", Access::User),
+        def("POST", "/posts/new", Access::User),
+        def("GET", "/drafts", Access::User),
+    ];
+    assert_eq!(
+        rx::overlaps(&routes),
+        [("GET /posts/{id}".to_owned(), "GET /posts/new".to_owned())]
+    );
+    let tests = r#"app.get("/posts/1").await; app.get("/posts/new").await;"#;
+    assert!(rx::tested("/posts/{id}", tests));
+    assert!(!rx::tested("/drafts", tests));
+    let doc = "| GET | `/posts/{id}` | `posts::show` | public |\n";
+    assert_eq!(rx::missing_from_docs(&routes[..2], doc), ["GET /posts/new"]);
+}
+
+/// Handler sources are shown relative to the app, never as an absolute path.
+#[tokio::test]
+async fn route_sources_are_app_relative() {
+    let app = dev_app().await;
+    let src = rx::source_of(std::path::Path::new("."), "home::index").expect("found");
+    assert!(src.starts_with("src/controllers/home.rs:"), "{src}");
+    let page = app.get("/dev/dashboard/routes").await;
+    page.assert_ok().assert_contains("src/controllers/home.rs:");
+    let cwd = std::env::current_dir().unwrap().display().to_string();
+    page.assert_not_contains(&cwd);
+    assert!(rx::source_of(std::path::Path::new("."), "../etc::passwd").is_none());
+}
+
+/// The explorer groups by area and resource, with live numbers, problems and Try it links.
+#[tokio::test]
+async fn the_routes_explorer_groups_routes_with_stats_and_problems() {
+    let app = dev_app().await;
+    app.get("/dev/lab/error?status=500").await;
+    app.get("/dev/dashboard/routes")
+        .await
+        .assert_ok()
+        .assert_contains("class=\"badge area-app\"")
+        .assert_contains("class=\"badge area-dev\"")
+        .assert_text("server errors")
+        .assert_text("never hit in this session")
+        .assert_contains("target=\"_blank\" rel=\"noopener\"");
+    app.get("/dev/dashboard/routes?area=admin")
+        .await
+        .assert_ok()
+        .assert_not_contains("area-app\"");
+    app.get("/dev/dashboard/routes?q=lab&problems=1")
+        .await
+        .assert_ok();
+}
+
+// ---- schema -------------------------------------------------------------------------------------
+
+/// The schema browser shows tables, columns, indexes, foreign keys and counts, never a row's data.
+#[tokio::test]
+async fn the_schema_browser_never_shows_row_data() {
+    let app = dev_app().await;
+    lab::seed(app.db(), 2).await.unwrap();
+    app.db()
+        .execute_unprepared("UPDATE lab_orders SET customer = 'private-person@example.com'")
+        .await
+        .unwrap();
+    app.get("/dev/dashboard/schema")
+        .await
+        .assert_ok()
+        .assert_contains("id=\"table-lab_orders\"")
+        .assert_contains("lab_order_items_order_id_idx")
+        .assert_text("→ lab_orders")
+        .assert_text("2 rows")
+        .assert_contains("m20261016_000600_create_lab_orders")
+        .assert_not_contains("private-person");
+}
+
+// ---- tests page ---------------------------------------------------------------------------------
+
+/// JUnit from nextest is imported: per-database counts, slowest tests, failures with output, flaky
+/// tests, coverage, and the acceptance criteria tests cite.
+#[tokio::test]
+async fn test_runs_are_imported_with_flaky_tests_and_coverage() {
+    let app = dev_app().await;
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join(testruns::DIR);
+    assert_eq!(dashboard::cli::demo_test_runs(&dir).unwrap(), 14);
+    std::fs::create_dir_all(root.path().join("product/features")).unwrap();
+    std::fs::write(
+        root.path().join("product/features/orders.md"),
+        "- [x] AC-orders-1: totals\n- [ ] AC-orders-2: refunds\n- ~~AC-orders-3: dropped~~\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.path().join("tests/app")).unwrap();
+    std::fs::write(
+        root.path().join("tests/app/orders_test.rs"),
+        "/// AC-orders-1\n#[test] fn totals() {}\n",
+    )
+    .unwrap();
+    *lock(&HUB.tests.root) = Some(root.path().to_path_buf());
+    let runs = testruns::load_runs(&dir);
+    assert_eq!(runs.len(), 14);
+    assert_eq!(runs[0].suite(testruns::Db::Postgres).unwrap().failed, 1);
+    let cases = testruns::load_cases(&dir, &runs[0].id, testruns::Db::Postgres);
+    let failed = cases
+        .iter()
+        .find(|c| c.outcome == testruns::Outcome::Failed)
+        .unwrap();
+    assert!(
+        failed.output.contains("totals differ by one cent"),
+        "{}",
+        failed.output
+    );
+    let spec = testruns::spec_coverage(root.path());
+    assert_eq!((spec.total, spec.cited), (2, 1));
+    assert_eq!(spec.uncited[0].0, "AC-orders-2");
+    app.get("/dev/dashboard/tests")
+        .await
+        .assert_ok()
+        .assert_text("84.9%")
+        .assert_text("1 of 2")
+        .assert_text("AC-orders-2")
+        .assert_text("login_is_rate_limited")
+        .assert_text("totals differ by one cent")
+        .assert_contains("class=\"bars\"");
+    app.get("/dev/dashboard/tests?run=../../etc")
+        .await
+        .assert_ok();
+}
+
+/// The Run tests button runs the suite in the background and reports progress (a stand-in
+/// command here, so the suite never runs itself).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_run_tests_button_runs_in_the_background_with_progress() {
+    let app = dev_app().await;
+    let root = tempfile::tempdir().unwrap();
+    *lock(&HUB.tests.root) = Some(root.path().to_path_buf());
+    *lock(&HUB.tests.command) = Some(vec![
+        "sh".into(),
+        "-c".into(),
+        "echo '    Starting 2 tests across 1 binary' >&2; echo '        PASS [   0.010s] (1/2) app a_test' >&2; echo '        FAIL [   0.020s] (2/2) app b_test' >&2".into(),
+    ]);
+    app.post_form("/dev/dashboard/tests/run", &[("db", "nonsense")])
+        .await
+        .assert_redirect_to("/dev/dashboard/tests");
+    app.post_form("/dev/dashboard/tests/run", &[("db", "postgres")])
+        .await;
+    assert!(!HUB.tests.running(), "no Postgres URL, no run");
+    app.post_form("/dev/dashboard/tests/run", &[("db", "sqlite")])
+        .await
+        .assert_redirect_to("/dev/dashboard/tests");
+    wait_until("the run finishes", async || {
+        lock(&HUB.tests.progress).finished_run.is_some()
+    })
+    .await;
+    let p = lock(&HUB.tests.progress).clone();
+    assert_eq!((p.total, p.passed, p.failed), (2, 1, 1));
+    assert!(p.lines.iter().any(|l| l.contains("b_test")));
+    assert_eq!(
+        testruns::load_runs(&root.path().join(testruns::DIR)).len(),
+        1
+    );
+}
+
+// ---- GitHub -------------------------------------------------------------------------------------
+
+/// Without GITHUB_REPO the page says what to set, and nothing is fetched.
+#[tokio::test]
+async fn the_github_page_explains_itself_without_a_repo() {
+    let app = dev_app().await;
+    app.get("/dev/dashboard/github")
+        .await
+        .assert_ok()
+        .assert_text("Which repository?")
+        .assert_contains("GITHUB_REPO=owner/name");
+}
+
+/// The recorded fixture renders runs, the success trend, PRs, issues, the release and alerts.
+#[tokio::test]
+async fn the_github_page_renders_ci_and_repo_status_from_a_fixture() {
+    let app = TestApp::with_config(Config {
+        env: AppEnv::Development,
+        dashboard: DashboardConfig {
+            github_repo: Some("example-org/example-app".into()),
+            github_fixture: Some("tests/fixtures/github".into()),
+            ..DashboardConfig::default()
+        },
+        ..Config::test()
+    })
+    .await;
+    app.get("/dev/dashboard/github")
+        .await
+        .assert_ok()
+        .assert_text("example-org/example-app")
+        .assert_text("CI success")
+        .assert_text("v1.4.0")
+        .assert_text("Dependabot alerts")
+        .assert_text("in progress")
+        .assert_contains("https://github.com/example-org/example-app/actions/runs/")
+        .assert_contains("class=\"bars\"")
+        .assert_text("recorded fixture");
+}
+
+/// Against a mock GitHub on the loopback (no real network): the token goes in the Authorization
+/// header only, never onto a page, into Debug or into the log; answers are cached for 60 s.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_github_token_is_never_shown_or_logged() {
+    let _guard = traced();
+    let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let calls = seen.clone();
+    let mock = Router::new().fallback(move |req: Request<Body>| {
+        let calls = calls.clone();
+        async move {
+            let auth = req
+                .headers()
+                .get("authorization")
+                .map(|v| v.to_str().unwrap().to_owned())
+                .unwrap_or_default();
+            calls.lock().unwrap().push(format!("{} {auth}", req.uri()));
+            let path = req.uri().path().to_owned();
+            let body = if path.ends_with("/example-app") {
+                r#"{"html_url":"https://github.com/example-org/example-app","default_branch":"main","open_issues_count":3,"stargazers_count":1}"#
+            } else if path.ends_with("/pulls") {
+                "[]"
+            } else if path.ends_with("/runs") {
+                r#"{"workflow_runs":[]}"#
+            } else {
+                "{}"
+            };
+            (
+                [
+                    ("x-ratelimit-limit", "5000"),
+                    ("x-ratelimit-remaining", "4999"),
+                    ("x-ratelimit-reset", "9999999999"),
+                    ("content-type", "application/json"),
+                ],
+                body,
+            )
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, mock).await });
+    let token = "ghp_FIXTUREtoken0000000000000000000000";
+    let cfg = DashboardConfig {
+        github_repo: Some("example-org/example-app".into()),
+        github_token: Some(token.into()),
+        github_api: format!("http://{addr}"),
+        ..DashboardConfig::default()
+    };
+    let cache = github::Cache::default();
+    let view = github::load(&cfg, &cache).await;
+    assert!(view.errors.is_empty(), "{:?}", view.errors);
+    assert_eq!(view.open_issues, Some(3));
+    assert_eq!(view.rate.remaining, Some(4999));
+    let first = seen.lock().unwrap().len();
+    assert_eq!(first, 5);
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .all(|c| c.ends_with(&format!("Bearer {token}")))
+    );
+    github::load(&cfg, &cache).await;
+    assert_eq!(seen.lock().unwrap().len(), first, "cached for 60 s");
+    let app = TestApp::with_config(Config {
+        env: AppEnv::Development,
+        dashboard: cfg.clone(),
+        ..Config::test()
+    })
+    .await;
+    for path in [
+        "/dev/dashboard/github",
+        "/dev/dashboard/config",
+        "/dev/dashboard.json",
+        "/dev/dashboard/logs",
+    ] {
+        app.get(path)
+            .await
+            .assert_ok()
+            .assert_not_contains(token)
+            .assert_not_contains("ghp_");
+    }
+    assert!(!format!("{cfg:?}").contains(token));
+    assert!(
+        lock(&HUB.logs)
+            .lines()
+            .iter()
+            .all(|l| !l.message.contains(token) && !l.fields.contains(token))
+    );
+}
+
+/// A used-up rate limit stops further calls until the reset; a silent server times out quickly
+/// with a helpful message.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn github_rate_limits_and_timeouts_are_respected() {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let count = hits.clone();
+    let mock = Router::new().fallback(move || {
+        count.fetch_add(1, Ordering::SeqCst);
+        async {
+            (
+                StatusCode::FORBIDDEN,
+                [
+                    ("x-ratelimit-remaining", "0"),
+                    ("x-ratelimit-reset", "9999999999"),
+                ],
+                "{}",
+            )
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, mock).await });
+    let cfg = DashboardConfig {
+        github_repo: Some("example-org/example-app".into()),
+        github_api: format!("http://{addr}"),
+        ..DashboardConfig::default()
+    };
+    let cache = github::Cache::default();
+    let view = github::load(&cfg, &cache).await;
+    assert!(view.errors[0].contains("rate limit"), "{:?}", view.errors);
+    let after_first = hits.load(Ordering::SeqCst);
+    github::load(&cfg, &cache).await;
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        after_first,
+        "no calls while limited"
+    );
+    let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let silent_addr = silent.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((s, _)) = silent.accept().await {
+            held.push(s);
+        }
+    });
+    let started = Instant::now();
+    let view = github::load(
+        &DashboardConfig {
+            github_api: format!("http://{silent_addr}"),
+            ..cfg
+        },
+        &github::Cache::default(),
+    )
+    .await;
+    assert!(started.elapsed() < Duration::from_secs(8));
+    assert!(
+        view.errors[0].contains("didn't answer"),
+        "{:?}",
+        view.errors
+    );
+}
+
+// ---- agents -------------------------------------------------------------------------------------
+
+/// `/dev/dashboard.json` and `/dev/introspect.json` carry the numbers an agent asks for first.
+#[tokio::test]
+async fn agents_get_the_numbers_as_json() {
+    let app = dev_app().await;
+    app.get("/dev/lab/slow-query").await.assert_ok();
+    let v: serde_json::Value = app.get("/dev/dashboard.json").await.json();
+    assert_eq!(v["enabled"], true);
+    assert!(
+        v["routes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["route"] == "/dev/lab/slow-query")
+    );
+    assert!(
+        v["slow_sql"][0]["sql"]
+            .as_str()
+            .unwrap()
+            .contains("WITH RECURSIVE")
+    );
+    let i: serde_json::Value = app.get("/dev/introspect.json").await.json();
+    assert_eq!(i["dashboard"]["pages"], "/dev/dashboard");
+}

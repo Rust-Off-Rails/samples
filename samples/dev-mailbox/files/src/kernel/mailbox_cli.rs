@@ -208,3 +208,25 @@ async fn tail(db: &DatabaseConnection, to: Option<String>) -> anyhow::Result<()>
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::seed_mail;
+    use crate::kernel::mailbox_web::checks;
+
+    /// The seeded "Weekly digest" has a 496 px banner: the 320 px check flags it, and only it.
+    #[test]
+    fn the_seeded_weekly_digest_overflows_at_320_px() {
+        for email in seed_mail("http://localhost:3000") {
+            let flagged = checks(&email.text, &email.html, &[], &email.subject)
+                .iter()
+                .any(|c| c.message.contains("320 px"));
+            assert_eq!(
+                flagged,
+                email.subject.starts_with("Weekly digest"),
+                "{}",
+                email.subject
+            );
+        }
+    }
+}

@@ -6,7 +6,7 @@ Every email your app sends in development, in a real inbox at **`/dev/mailbox`**
 - **Message view**: the HTML part in a sandboxed frame (no script, opaque origin), the text part, the raw RFC 822 source, every header.
 - **Desktop, 600 px, 320 px and Dark** previews. Dark applies the mail's own dark-mode CSS, or the full-color inversion many mail apps do.
 - **Codes and links** pulled out of the message with big copy buttons; links sent while the app ran on another port get an "Open here".
-- **Checks** before real inboxes see it: relative URLs, a missing text part, images without alt text, Gmail's 102 KB clipping, `<script>`, a long subject, `List-Unsubscribe`.
+- **Checks** before real inboxes see it: relative URLs, a missing text part, images without alt text, Gmail's 102 KB clipping, a layout wider than a 320 px phone (a fixed-width banner, table or block that no `max-width` reins in), `<script>`, a long subject, `List-Unsubscribe`.
 - **Attachments** listed with size and type, raster images as thumbnails, always downloaded (never rendered on your origin).
 - **Search**, **delete**, **clear**, **`.eml` download**, unread state.
 - **Mailer previews**: every mailer rendered from sample data in the same viewer, never sent.

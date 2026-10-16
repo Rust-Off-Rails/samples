@@ -221,6 +221,16 @@ pub fn checks(text: &str, html: &str, headers: &[(String, String)], subject: &st
             ),
         );
     }
+    let wide = overflows_320(html);
+    if !wide.is_empty() {
+        add(
+            "warn",
+            format!(
+                "Overflows a 320 px screen (the narrowest phones scroll sideways): {}. Give it max-width:100% (images also height:auto), or a fluid width.",
+                wide.join("; ")
+            ),
+        );
+    }
     if lower.contains("<script") {
         add(
             "warn",
@@ -246,6 +256,150 @@ pub fn checks(text: &str, html: &str, headers: &[(String, String)], subject: &st
         add("info", "No List-Unsubscribe header. Fine for transactional mail; bulk senders need it (Gmail and Yahoo require one-click unsubscribe).".into());
     }
     out
+}
+
+/// The narrowest screen a mail must fit.
+const NARROW_PX: u32 = 320;
+
+/// What makes a mail wider than 320 px, judged from its HTML without a browser: an element with a
+/// fixed width over 320 px (a `width` attribute, or `width:`/`min-width:` in its `style`) that no
+/// `max-width` reins in (on the element, or a `<style>` rule for its tag such as
+/// `img{max-width:100%}`), and `<style>` rules that set such a width without a `max-width`.
+/// Percentages, `auto` and widths up to 320 px pass.
+pub fn overflows_320(html: &str) -> Vec<String> {
+    let lower = html.to_ascii_lowercase();
+    let mut out: Vec<String> = Vec::new();
+    // <style> blocks: rules with a fixed width over 320 px, and the tags a rule reins in.
+    let mut capped_tags: Vec<String> = Vec::new();
+    let mut rest = lower.as_str();
+    while let Some(start) = rest.find("<style") {
+        let after = &rest[start..];
+        let Some(open) = after.find('>') else { break };
+        let end = after.find("</style").unwrap_or(after.len());
+        let css = &after[open + 1..end.max(open + 1)];
+        for rule in css.split('}') {
+            let Some((selectors, decls)) = rule.rsplit_once('{') else {
+                continue;
+            };
+            let selectors = selectors.rsplit('{').next().unwrap_or(selectors).trim();
+            if css_px(decls, "max-width").is_some()
+                || decls.contains("max-width:100%")
+                || decls.contains("max-width: 100%")
+            {
+                capped_tags.extend(
+                    selectors
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|s| s.chars().all(|c| c.is_ascii_alphanumeric()))
+                        .map(str::to_owned),
+                );
+                continue;
+            }
+            for prop in ["width", "min-width"] {
+                if let Some(px) = css_px(decls, prop).filter(|px| *px > NARROW_PX)
+                    && !selectors.starts_with('@')
+                    && !out.iter().any(|o| o.starts_with(selectors))
+                {
+                    out.push(format!("{selectors} {{{prop}:{px}px}}"));
+                }
+            }
+        }
+        rest = &after[end.min(after.len())..];
+        if end == after.len() {
+            break;
+        }
+    }
+    // Elements.
+    let mut at = 0;
+    while let Some(i) = lower[at..].find('<') {
+        let start = at + i + 1;
+        let Some(len) = lower[start..].find('>') else {
+            break;
+        };
+        let tag = &lower[start..start + len];
+        at = start + len;
+        let name: String = tag
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric())
+            .collect();
+        if name.is_empty() || name == "style" {
+            continue;
+        }
+        let style = attr(tag, "style").unwrap_or_default();
+        let capped = css_px(&style, "max-width").is_some()
+            || style.contains("max-width:100%")
+            || style.contains("max-width: 100%")
+            || capped_tags.contains(&name);
+        let min = css_px(&style, "min-width").filter(|px| *px > NARROW_PX);
+        let fixed = css_px(&style, "width").or_else(|| {
+            attr(tag, "width").and_then(|w| w.trim_end_matches("px").trim().parse::<u32>().ok())
+        });
+        let what = match (min, fixed) {
+            (Some(px), _) => Some(format!("<{name}> min-width {px}px")),
+            (None, Some(px)) if px > NARROW_PX && !capped => Some(format!("<{name}> {px}px wide")),
+            _ => None,
+        };
+        if let Some(w) = what
+            && !out.contains(&w)
+        {
+            out.push(w);
+        }
+        if out.len() >= 5 {
+            break;
+        }
+    }
+    out
+}
+
+/// The pixel value of `prop` in CSS declarations (`width: 496px`), not of a longer property
+/// that ends with it (`max-width`).
+fn css_px(decls: &str, prop: &str) -> Option<u32> {
+    let mut from = 0;
+    while let Some(i) = decls[from..].find(prop) {
+        let at = from + i;
+        from = at + prop.len();
+        let before = decls[..at].chars().next_back();
+        if before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '-') {
+            continue;
+        }
+        let rest = decls[from..].trim_start();
+        let Some(value) = rest.strip_prefix(':') else {
+            continue;
+        };
+        let value = value.trim_start();
+        let digits: String = value.chars().take_while(char::is_ascii_digit).collect();
+        if !digits.is_empty() && value[digits.len()..].trim_start().starts_with("px") {
+            return digits.parse().ok();
+        }
+    }
+    None
+}
+
+/// An attribute's value in a lowercased tag (`width="496"`, `width=496`).
+fn attr(tag: &str, name: &str) -> Option<String> {
+    let mut from = 0;
+    while let Some(i) = tag[from..].find(name) {
+        let at = from + i;
+        from = at + name.len();
+        let before = tag[..at].chars().next_back();
+        if !before.is_some_and(char::is_whitespace) {
+            continue;
+        }
+        let rest = tag[from..].trim_start();
+        let Some(value) = rest.strip_prefix('=') else {
+            continue;
+        };
+        let value = value.trim_start();
+        return Some(match value.chars().next() {
+            Some(q @ ('"' | '\'')) => value[1..].split(q).next().unwrap_or_default().to_owned(),
+            _ => value
+                .split(|c: char| c.is_whitespace() || c == '/')
+                .next()
+                .unwrap_or_default()
+                .to_owned(),
+        });
+    }
+    None
 }
 
 #[derive(Template)]
@@ -1202,6 +1356,41 @@ mod tests {
         let plain = "<html><head></head><body>hi</body></html>";
         assert!(in_scheme(plain, Some("dark")).contains("invert(1)"));
         assert_eq!(in_scheme(plain, None), plain);
+    }
+
+    #[test]
+    fn mail_that_overflows_a_320_px_screen_is_flagged() {
+        // Flagged: fixed widths over 320 px that nothing reins in.
+        assert_eq!(
+            overflows_320(r#"<img src="a.png" width="496" height="120">"#),
+            ["<img> 496px wide"]
+        );
+        assert_eq!(
+            overflows_320(r#"<table width=600><tr><td>x</td></tr></table>"#),
+            ["<table> 600px wide"]
+        );
+        assert_eq!(
+            overflows_320(r#"<div style="width: 480px">x</div>"#),
+            ["<div> 480px wide"]
+        );
+        assert_eq!(
+            overflows_320(r#"<div style="min-width:400px;max-width:100%">x</div>"#),
+            ["<div> min-width 400px"]
+        );
+        assert_eq!(
+            overflows_320("<style>.hero{width:640px}</style><div class=hero></div>"),
+            [".hero {width:640px}"]
+        );
+        // Fine: fluid, small, or reined in.
+        assert!(
+            overflows_320(r#"<img width="300"><td width="50%"><table width="100%">"#).is_empty()
+        );
+        assert!(
+            overflows_320(r#"<img width="496" style="max-width:100%;height:auto">"#).is_empty()
+        );
+        assert!(overflows_320(r#"<style>img{max-width:100%}</style><img width="496">"#).is_empty());
+        assert!(overflows_320("<style>.card{max-width:560px;margin:0 auto}</style>").is_empty());
+        assert!(overflows_320(r#"<div data-width="900" title="width=900">x</div>"#).is_empty());
     }
 
     #[test]

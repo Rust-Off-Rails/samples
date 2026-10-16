@@ -206,7 +206,7 @@ pub fn redact_db(url: &str) -> String {
 }
 
 fn describe_config(c: &Config) -> Vec<(&'static str, String)> {
-    let uptime = (Utc::now() - *BOOTED_AT).num_seconds();
+    let uptime_ms = (Utc::now() - *BOOTED_AT).num_milliseconds();
     #[allow(unused_mut)] // samples add their facts below
     let mut facts = vec![
         ("APP_ENV", format!("{:?}", c.env).to_lowercase()),
@@ -218,7 +218,7 @@ fn describe_config(c: &Config) -> Vec<(&'static str, String)> {
             "Revision",
             c.revision.clone().unwrap_or_else(|| "not set".to_owned()),
         ),
-        ("Uptime", ui::duration(uptime * 1000)),
+        ("Uptime", ui::duration(uptime_ms)),
     ];
     // samples: system facts
     facts

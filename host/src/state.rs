@@ -23,6 +23,9 @@ pub struct AppState {
 impl AppState {
     /// `TestApp` builds state the same way, with `Config::test()` and its own database.
     pub fn new(config: Config, db: DatabaseConnection) -> anyhow::Result<Self> {
+        // WHY: uptime counts from boot. `BOOTED_AT` is lazy, so without this it started at the
+        // first read (the first /dev/system view), which then showed "0ms".
+        std::sync::LazyLock::force(&crate::kernel::ui::BOOTED_AT);
         let assets = AssetCatalog::load("static", config.is_development());
         // samples: state build
         Ok(Self {

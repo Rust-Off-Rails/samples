@@ -30,3 +30,10 @@ if [ $# -eq 0 ] || printf '%s\n' "$@" | grep -qx jobs-dashboard; then
   esac
 fi
 BASE="$base" OUT="$root/docs/screenshots" INSTALLED="$installed" node tools/screenshots/shoot.mjs "$@"
+if [ $# -eq 0 ] || printf '%s\n' "$@" | grep -qx dev-dashboard; then
+  case " $installed " in
+    *" dev-dashboard "*)
+      BASE="$base" OUT="$root/docs/screenshots/dev-dashboard" node tools/screenshots/shoot-dev-dashboard.mjs
+      ;;
+  esac
+fi

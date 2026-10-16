@@ -76,6 +76,30 @@ async fn dev_index_routes_and_system_pages_render() {
         .assert_contains("m20261016_000000_create_cache_entries");
 }
 
+/// Uptime counts from boot, not from the first time a page read the clock (it showed "0ms").
+#[tokio::test]
+async fn uptime_counts_from_boot_not_from_the_first_page_view() {
+    let app = dev_app().await;
+    // WHY: its own clock: reading BOOTED_AT here would start it and hide the bug.
+    let booted = std::time::Instant::now();
+    crate::support::wait_until("a second of uptime", async || {
+        booted.elapsed() >= std::time::Duration::from_millis(1100)
+    })
+    .await;
+    let page = app.get("/dev/system").await;
+    page.assert_ok();
+    let uptime = page
+        .body
+        .split("<dt>Uptime</dt><dd>")
+        .nth(1)
+        .and_then(|rest| rest.split('<').next())
+        .expect("an uptime row");
+    assert!(
+        uptime.ends_with('s') && !uptime.ends_with("ms"),
+        "uptime {uptime:?}"
+    );
+}
+
 #[tokio::test]
 async fn development_pages_load_dev_reload_and_others_do_not() {
     dev_app()

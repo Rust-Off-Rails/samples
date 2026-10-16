@@ -1,0 +1,15 @@
+{% extends "kernel/layout.html" %}
+{% block content %}
+<div class="dash" data-dashboard data-stream="{{ d.live }}" data-refresh="{{ d.refresh }}" data-base="{{ d.base }}">
+  <svg class="defs" aria-hidden="true" focusable="false"><defs><linearGradient id="grad-s1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="stop-s1" stop-opacity=".38"/><stop offset="1" class="stop-s1" stop-opacity="0"/></linearGradient><linearGradient id="grad-s2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="stop-s2" stop-opacity=".38"/><stop offset="1" class="stop-s2" stop-opacity="0"/></linearGradient><linearGradient id="grad-s3" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="stop-s3" stop-opacity=".38"/><stop offset="1" class="stop-s3" stop-opacity="0"/></linearGradient><linearGradient id="grad-s4" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="stop-s4" stop-opacity=".38"/><stop offset="1" class="stop-s4" stop-opacity="0"/></linearGradient><linearGradient id="grad-ok" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="stop-ok" stop-opacity=".38"/><stop offset="1" class="stop-ok" stop-opacity="0"/></linearGradient><linearGradient id="grad-warn" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="stop-warn" stop-opacity=".38"/><stop offset="1" class="stop-warn" stop-opacity="0"/></linearGradient><linearGradient id="grad-err" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="stop-err" stop-opacity=".38"/><stop offset="1" class="stop-err" stop-opacity="0"/></linearGradient><linearGradient id="grad-idle" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="stop-idle" stop-opacity=".38"/><stop offset="1" class="stop-idle" stop-opacity="0"/></linearGradient></defs></svg>
+  <nav class="dash-nav" aria-label="Dashboard">
+    {% for n in d.nav %}<a href="{{ n.href }}"{% if n.current %} aria-current="page"{% endif %}>{{ n.label }}</a>{% endfor %}
+    {% if !d.live.is_empty() %}
+    <span class="dash-live" data-live-status><span class="dot" aria-hidden="true"></span><span data-live-text>Live</span></span>
+    <button type="button" class="btn quiet dash-pause" data-live-toggle aria-pressed="false" hidden>Pause</button>
+    {% endif %}
+  </nav>
+  {% if d.ro %}<p class="dash-ro">Read-only production view: no load lab, no EXPLAIN, no parameters, no logs.</p>{% endif %}
+  {% block dash %}{% endblock %}
+</div>
+{% endblock %}

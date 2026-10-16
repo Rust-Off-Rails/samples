@@ -129,6 +129,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
             },
         ))
         .layer(from_fn(error::log_server_errors))
+        // samples: outer layers
         .layer(SetRequestIdLayer::new(x_request_id, MakeRequestUuid))
         .with_state(state))
 }

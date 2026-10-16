@@ -3,6 +3,7 @@
 
 use axum::http::{HeaderMap, StatusCode, header};
 use offrails_host::config::{AppEnv, Config};
+use offrails_host::kernel::security::DEV_CSP_EXTRA;
 
 use crate::support::TestApp;
 
@@ -41,7 +42,11 @@ fn assert_matrix(what: &str, h: &HeaderMap, tls: bool) {
     } else {
         CSP.to_owned()
     };
-    assert_eq!(value(h, "content-security-policy"), expected_csp, "{what}");
+    let csp = value(h, "content-security-policy");
+    // Development may add the directives samples declare (never production: below).
+    let dev_extra: String = DEV_CSP_EXTRA.iter().map(|d| format!("; {d}")).collect();
+    let csp = csp.strip_suffix(dev_extra.as_str()).unwrap_or(&csp);
+    assert_eq!(csp, expected_csp, "{what}");
     assert_eq!(value(h, "x-content-type-options"), "nosniff", "{what}");
     assert_eq!(
         value(h, "referrer-policy"),
@@ -171,4 +176,16 @@ async fn request_head_returns_headers_without_reading_the_body() {
     let (status, headers) = app.request_head("/", &[]).await;
     assert_eq!(status, StatusCode::OK);
     assert_matrix("head", &headers, true);
+}
+
+/// Development-only CSP directives (a report endpoint) never reach production.
+#[tokio::test]
+async fn production_csp_has_no_development_directives() {
+    let app = TestApp::with_config(production()).await;
+    let res = app.get("/").await;
+    let csp = value(&res.headers, "content-security-policy");
+    for directive in DEV_CSP_EXTRA {
+        assert!(!csp.contains(directive), "{csp}");
+    }
+    assert!(!csp.contains("report-uri"), "{csp}");
 }
