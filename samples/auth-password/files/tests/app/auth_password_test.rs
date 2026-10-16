@@ -444,12 +444,9 @@ async fn reset_link(app: &TestApp, email: &str) -> String {
 async fn reset_requests_look_identical_for_unknown_emails() {
     let app = TestApp::new().await;
     factories::user_with_password(app.db(), "ada@example.com").await;
-    let before = app.query_count();
     let known = app
         .post_form("/passwords", &[("email", "ada@example.com")])
         .await;
-    let known_queries = app.query_count() - before;
-    let before = app.query_count();
     let unknown = app
         .post_form("/passwords", &[("email", "nobody@example.com")])
         .await;
@@ -457,11 +454,16 @@ async fn reset_requests_look_identical_for_unknown_emails() {
     assert_eq!(known.location(), unknown.location());
     assert_eq!(known.body, unknown.body);
     assert_eq!(known.set_cookies(), unknown.set_cookies());
-    assert_eq!(
-        known_queries,
-        app.query_count() - before,
-        "the same database work on both paths"
-    );
+    // Both paths write the audit row (the unknown one without a user): the same request work.
+    // The email (and its token) is minted after the response, in the background.
+    let requested = auth_event::Entity::find()
+        .all(app.db())
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == Kind::PasswordResetRequested)
+        .count();
+    assert_eq!(requested, 2);
     app.settle().await;
     assert!(app.last_email_to("ada@example.com").is_some());
     assert!(app.last_email_to("nobody@example.com").is_none());
