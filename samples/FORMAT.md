@@ -80,11 +80,11 @@ The anchors `host/` provides (each file says what goes there):
 |------|---------|
 | `src/lib.rs` | `lib mods` |
 | `src/kernel/mod.rs` | `kernel mods` |
-| `src/kernel/ui.rs` | `kernel tabs` (a `Tab { … }` in the kernel header) |
+| `src/kernel/ui.rs` | `kernel tabs` (a `Tab { … }` in the kernel header), `hidden tabs` (the key of a host tab a sample replaces, e.g. `"system"`) |
 | `src/kernel/introspect.rs` | `introspect sections` (`out["x"] = …;`) |
 | `src/config.rs` | `config fields`, `config debug`, `config parse`, `config init`, `config test`, `config sections` (a sample's own config struct, appended) |
 | `src/state.rs` | `state fields`, `state build`, `state init`, `state fns` |
-| `src/routes.rs` | `routes` (`app = app.route(…)`), `dev routers` (merged in development only), `paths`, `routes table` (`ROUTES` rows) |
+| `src/routes.rs` | `routes` (`app = app.route(…)`), `dev routers` (merged in development only), `outer layers` (a `.layer(…)` outside everything but the request id: it sees every request, panics and timeouts included), `paths`, `routes table` (`ROUTES` rows) |
 | `src/controllers/mod.rs` | `controller mods` |
 | `src/controllers/application.rs` | `ctx init`, `extractors` |
 | `src/controllers/dev.rs` | `dev routes`, `dev tiles` (a `Tile { … },`), `dev try-it` (a `TryIt { … },`), `system facts` (`facts.push(…);`) |
@@ -92,7 +92,7 @@ The anchors `host/` provides (each file says what goes there):
 | `src/views/mod.rs` | `view mods`, `ctx fields` |
 | `src/models/mod.rs` | `model mods`, `model aliases` |
 | `src/tasks/mod.rs` | `task mods`, `tasks` |
-| `src/main.rs` | `cli commands`, `cli dispatch`, `serve start`, `serve stop` |
+| `src/main.rs` | `cli commands`, `cli dispatch`, `serve start`, `serve stop`, `tracing layers` (a `Box::new(…)` layer beside the log formatter) |
 | `migration/src/lib.rs` | `migration mods`, `migrations` |
 | `templates/layouts/application.html` | `dev footer links` |
 | `templates/shared/_nav.html` | `nav links` |

@@ -12,7 +12,9 @@ use offrails_host::{
     tasks,
 };
 use tokio::net::TcpListener;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{
+    EnvFilter, Layer, Registry, layer::SubscriberExt, util::SubscriberInitExt,
+};
 
 #[derive(Parser)]
 #[command(name = "app", about = "Offrails Host")]
@@ -89,12 +91,16 @@ fn init_tracing(config: &Config) {
             _ => "info,offrails_host=debug,tower_http=debug",
         })
     });
+    // Layers samples add (a dashboard's log tail and traces), beside the formatter.
+    let layers: Vec<Box<dyn Layer<Registry> + Send + Sync>> = vec![
+        // samples: tracing layers
+    ];
+    let registry = tracing_subscriber::registry().with(layers).with(filter);
     match config.log_format {
-        LogFormat::Json => tracing_subscriber::fmt()
-            .json()
-            .with_env_filter(filter)
+        LogFormat::Json => registry
+            .with(tracing_subscriber::fmt::layer().json())
             .init(),
-        LogFormat::Pretty => tracing_subscriber::fmt().with_env_filter(filter).init(),
+        LogFormat::Pretty => registry.with(tracing_subscriber::fmt::layer()).init(),
     }
 }
 

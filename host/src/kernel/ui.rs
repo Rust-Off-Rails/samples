@@ -70,6 +70,12 @@ pub const TABS: &[Tab] = &[
     },
 ];
 
+/// Keys of `TABS` a sample replaces (a dashboard that supersedes System), hidden from the header.
+/// The pages stay routed; only the tab goes.
+pub const HIDDEN_TABS: &[&str] = &[
+    // samples: hidden tabs
+];
+
 pub struct TabLink {
     pub label: &'static str,
     pub href: &'static str,
@@ -102,7 +108,7 @@ impl Chrome {
             assets,
             tabs: TABS
                 .iter()
-                .filter(|t| development || !t.dev_only)
+                .filter(|t| (development || !t.dev_only) && !HIDDEN_TABS.contains(&t.key))
                 .map(|t| TabLink {
                     label: t.label,
                     href: t.href,
