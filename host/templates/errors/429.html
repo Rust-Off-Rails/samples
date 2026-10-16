@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="{{ theme.as_str() }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light dark">
+  <meta name="color-scheme" content="{{ theme.color_scheme() }}">
   <title>Slow down</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/app.css">

@@ -12,7 +12,10 @@ use axum::{
     response::Response,
 };
 
-use crate::{config::Config, kernel::cookie};
+use crate::{
+    config::Config,
+    kernel::{cookie, theme},
+};
 
 /// The session cookie's name in development and in production (`__Host-`: Secure, Path=/, no
 /// Domain). Defined here because the header matrix needs it before accounts exist; the
@@ -147,8 +150,14 @@ fn is_public_file(path: &str) -> bool {
     path.starts_with("/static/") || matches!(path, "/favicon.ico" | "/robots.txt" | "/sitemap.xml")
 }
 
+/// Cookies a script must be able to write, so the backstop never makes them HttpOnly. Each one
+/// holds a preference, never a secret.
+// SECURITY: an allowlist by exact name; every other production cookie still gets HttpOnly
+// (test: the_theme_cookie_stays_script_writable_in_production).
+const SCRIPT_WRITABLE_COOKIES: &[&str] = &[theme::COOKIE];
+
 /// A backstop for cookies built without config (the flash): production cookies are always
-/// `Secure; HttpOnly; SameSite`.
+/// `Secure; HttpOnly; SameSite` (`Secure; SameSite` for `SCRIPT_WRITABLE_COOKIES`).
 fn harden_cookies(headers: &mut HeaderMap) {
     let hardened: Vec<HeaderValue> = headers
         .get_all(header::SET_COOKIE)
@@ -160,7 +169,10 @@ fn harden_cookies(headers: &mut HeaderMap) {
             if !lower.contains("; secure") {
                 out.push_str("; Secure");
             }
-            if !lower.contains("; httponly") {
+            let script_writable = SCRIPT_WRITABLE_COOKIES
+                .iter()
+                .any(|name| s.starts_with(&format!("{name}=")));
+            if !lower.contains("; httponly") && !script_writable {
                 out.push_str("; HttpOnly");
             }
             if !lower.contains("; samesite=") {

@@ -11,6 +11,7 @@ use axum::http::request::Parts;
 use crate::error::AppError;
 use crate::kernel::css::css_warning;
 use crate::kernel::flash::RequestFlash;
+use crate::kernel::theme::Theme;
 use crate::models::Page;
 use crate::state::AppState;
 use crate::views::{Ctx, DEFAULT_DESCRIPTION};
@@ -38,6 +39,7 @@ impl FromRequestParts<AppState> for Ctx {
             dev: development,
             // Missing, empty or stale static/app.css: a plain-text banner first in <main>.
             css_warning: if development { css_warning() } else { None },
+            theme: Theme::from_headers(&parts.headers),
             // samples: ctx init
         })
     }

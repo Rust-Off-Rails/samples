@@ -2,21 +2,32 @@
    it must not depend on the app's Tailwind build or design, so app UI changes never break it.
    A kernel page with more UI ships its own stylesheet next to this one (static/kernel/<page>.css)
    and declares it on its Chrome; nothing a kernel page needs lives in assets/app.css.
-   No inline styles anywhere (the CSP is style-src 'self'). Light + dark through
-   prefers-color-scheme; usable at 375px. Every color pair meets WCAG 2.2 AA. */
+   No inline styles anywhere (the CSP is style-src 'self'). Usable at 375px.
+   Theme: every color token is defined once, `light-dark(<light>, <dark>)`, and `color-scheme`
+   picks the side: the OS by default, or the header switch's choice, which the server renders as
+   `<html data-theme>` from the `offrails_theme` cookie (src/kernel/theme.rs). Never add a
+   color-scheme media query: it would ignore the switch. Every pair meets WCAG 2.2 AA in both.
+   APP: change the tones to match your brand (keep the contrast; run axe in both themes). */
 :root {
-  --bg: #fafaf9; --panel: #ffffff; --fg: #1c1917; --muted: #57534e; --border: #d6d3d1;
-  --hover: #f5f5f4; --accent: #4338ca; --accent-bg: #eef2ff; --on-accent: #ffffff;
-  --ok: #166534; --warn: #854d0e; --err: #b91c1c; --info: #075985;
   color-scheme: light dark;
+  --bg: light-dark(#fafaf9, #1c1917);
+  --panel: light-dark(#ffffff, #292524);
+  --fg: light-dark(#1c1917, #fafaf9);
+  --muted: light-dark(#57534e, #c2bcb8);
+  --border: light-dark(#d6d3d1, #57534e);
+  --hover: light-dark(#f5f5f4, #34302d);
+  --accent: light-dark(#4338ca, #a5b4fc);
+  --accent-bg: light-dark(#eef2ff, #312e81);
+  --on-accent: light-dark(#ffffff, #1e1b4b);
+  --ok: light-dark(#166534, #4ade80);
+  --warn: light-dark(#854d0e, #fbbf24);
+  --err: light-dark(#b91c1c, #fca5a5);
+  --info: light-dark(#075985, #7dd3fc);
+  --menu-shadow: 0 8px 24px light-dark(rgb(0 0 0 / .12), rgb(0 0 0 / .5));
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #1c1917; --panel: #292524; --fg: #fafaf9; --muted: #c2bcb8; --border: #57534e;
-    --hover: #34302d; --accent: #a5b4fc; --accent-bg: #312e81; --on-accent: #1e1b4b;
-    --ok: #4ade80; --warn: #fbbf24; --err: #fca5a5; --info: #7dd3fc;
-  }
-}
+/* WHY: the switch's choice wins over the OS; "system" keeps `light dark`. */
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
 a { color: var(--accent); }
@@ -38,6 +49,20 @@ code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; 
 .bar nav a:hover { background: var(--hover); color: var(--fg); }
 .bar nav a[aria-current="page"] { background: var(--accent-bg); color: var(--accent); font-weight: 600; }
 .bar .back { font-size: .85rem; text-decoration: none; color: var(--muted); }
+
+/* theme switch: a disclosure (works without JS) holding a POST form of three toggle buttons */
+.sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+.ti { width: 1rem; height: 1rem; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.theme { position: relative; }
+.theme > summary { display: inline-flex; align-items: center; gap: .35rem; padding: .15rem .55rem; border: 1px solid var(--border); border-radius: 6px; font-size: .85rem; color: var(--muted); cursor: pointer; list-style: none; user-select: none; }
+.theme > summary::-webkit-details-marker { display: none; }
+.theme > summary:hover, .theme[open] > summary { background: var(--hover); color: var(--fg); }
+.theme-menu { position: absolute; right: 0; top: calc(100% + .35rem); z-index: 6; display: flex; flex-direction: column; gap: 2px; min-width: 9rem; padding: 4px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--menu-shadow); }
+.theme-menu button { display: flex; align-items: center; gap: .5rem; width: 100%; padding: .35rem .6rem; border: 0; border-radius: 6px; background: transparent; color: var(--fg); font: inherit; font-size: .85rem; text-align: left; cursor: pointer; }
+.theme-menu button:hover { background: var(--hover); }
+.theme-menu button[aria-pressed="true"] { background: var(--accent-bg); color: var(--accent); font-weight: 600; }
+.theme-menu .check { margin-left: auto; visibility: hidden; }
+.theme-menu button[aria-pressed="true"] .check { visibility: visible; }
 main { padding: 1rem; max-width: 1400px; margin: 0 auto; }
 .flash { padding: .6rem 1rem; font-size: .9rem; border-bottom: 1px solid var(--border); }
 .flash-notice { background: var(--accent-bg); }
@@ -86,5 +111,10 @@ tbody tr:hover { background: var(--hover); }
 @media (max-width: 600px) {
   .bar { gap: .25rem .75rem; padding: .5rem .75rem; }
   .bar nav { order: 3; flex-basis: 100%; flex-wrap: nowrap; overflow-x: auto; margin: 0 -.25rem; }
-  .bar .back { margin-left: auto; }
+  .theme { margin-left: auto; }
+  /* WHY: open, the switch takes its own row instead of floating over the tabs (axe target-size). */
+  .theme[open] { order: 2; flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+  .theme[open] ~ .back { margin-left: auto; }
+  .theme-menu { position: static; flex-direction: row; flex-wrap: wrap; min-width: 0; box-shadow: none; }
+  .theme-menu button { width: auto; }
 }

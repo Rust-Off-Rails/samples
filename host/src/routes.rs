@@ -11,7 +11,7 @@ use axum::{
     http::{HeaderName, StatusCode},
     middleware::{from_fn, from_fn_with_state, map_response},
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
 };
 use tower_http::{
     catch_panic::CatchPanicLayer,
@@ -24,7 +24,7 @@ use tower_http::{
 };
 
 use crate::{
-    controllers::{dev, errors, health, home, meta, migrations},
+    controllers::{dev, errors, health, home, meta, migrations, theme},
     error::{self, AppError},
     kernel::{assets, flash, security},
     state::AppState,
@@ -59,6 +59,8 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .route("/up", get(health::up))
         .route("/robots.txt", get(meta::robots))
         .route("/sitemap.xml", get(meta::sitemap))
+        // The theme switch's no-JS fallback; kernel pages (/admin/jobs too) and the app layout.
+        .route("/theme", post(theme::update))
         // Browsers ask for it at the root whatever the <link> says.
         .route_service("/favicon.ico", ServeFile::new("static/favicon.ico"));
     // samples: routes
@@ -135,6 +137,10 @@ pub mod paths {
     pub fn dev() -> String {
         "/dev".into()
     }
+    /// The theme switch (`POST`, no-JS fallback).
+    pub fn theme() -> String {
+        "/theme".into()
+    }
     // samples: paths
 }
 
@@ -147,6 +153,7 @@ pub const ROUTES: &[(&str, &str, &str, Access)] = &[
     ("GET",  "/robots.txt",          "meta::robots",    Access::Public),
     ("GET",  "/sitemap.xml",         "meta::sitemap",   Access::Public),
     ("GET",  "/favicon.ico",         "static favicon",  Access::Public),
+    ("POST", "/theme",               "theme::update",   Access::Public),
     ("GET",  "/dev",                 "dev::index",      Access::Dev),
     ("GET",  "/dev/routes",          "dev::routes",     Access::Dev),
     ("GET",  "/dev/system",          "dev::system",     Access::Dev),

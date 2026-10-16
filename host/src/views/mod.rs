@@ -29,6 +29,8 @@ pub struct Ctx {
     pub noindex: bool,
     /// Development only: static/app.css is missing, empty or stale (dev-tools.md#introspection).
     pub css_warning: Option<String>,
+    /// `<html data-theme>`: the `offrails_theme` cookie (kernel/theme.rs).
+    pub theme: crate::kernel::theme::Theme,
     // samples: ctx fields
 }
 

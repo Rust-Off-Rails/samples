@@ -16,6 +16,7 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use crate::config::APP_NAME;
 use crate::kernel::assets::Assets;
 use crate::kernel::flash::FlashMessage;
+use crate::kernel::theme::ThemeSwitch;
 
 /// When this process booted (uptime on `/dev/system`).
 pub static BOOTED_AT: LazyLock<DateTime<Utc>> = LazyLock::new(Utc::now);
@@ -82,6 +83,8 @@ pub struct Chrome {
     pub assets: Assets,
     pub tabs: Vec<TabLink>,
     pub flash: Option<FlashMessage>,
+    /// The request's theme (`<html data-theme>`) and the header switch's return path.
+    pub theme: ThemeSwitch,
     /// The page's own stylesheets and scripts, after `admin.css` / `admin.js`.
     pub stylesheets: Vec<String>,
     pub scripts: Vec<String>,
@@ -94,6 +97,7 @@ impl Chrome {
         assets: Assets,
         development: bool,
         flash: Option<FlashMessage>,
+        theme: ThemeSwitch,
     ) -> Self {
         Self {
             title: title.into(),
@@ -109,6 +113,7 @@ impl Chrome {
                 })
                 .collect(),
             flash,
+            theme,
             stylesheets: Vec::new(),
             scripts: Vec::new(),
         }
@@ -125,6 +130,16 @@ impl Chrome {
         self.scripts.push(src);
         self
     }
+}
+
+/// `raw` when it is a path on this site, for `return_to` redirects: never `//host`,
+/// `https://…`, a backslash or a control character, so no open redirect.
+pub fn same_site_path(raw: &str) -> Option<String> {
+    let ok = raw.starts_with('/')
+        && !raw.starts_with("//")
+        && !raw.contains('\\')
+        && !raw.chars().any(char::is_control);
+    ok.then(|| raw.to_owned())
 }
 
 /// "just now", "12s ago", "5m ago", "3h ago", "2d ago".
@@ -230,17 +245,53 @@ mod tests {
 
     #[test]
     fn production_chrome_has_no_dev_tabs() {
-        let chrome = Chrome::new("x", "dev", Assets::default(), false, None);
+        let chrome = Chrome::new(
+            "x",
+            "dev",
+            Assets::default(),
+            false,
+            None,
+            ThemeSwitch::default(),
+        );
         assert!(chrome.tabs.iter().all(|t| !t.href.starts_with("/dev")));
-        let chrome = Chrome::new("x", "dev", Assets::default(), true, None);
+        let chrome = Chrome::new(
+            "x",
+            "dev",
+            Assets::default(),
+            true,
+            None,
+            ThemeSwitch::default(),
+        );
         assert!(chrome.tabs.iter().any(|t| t.active && t.href == "/dev"));
     }
 
     #[test]
+    fn return_paths_are_same_site_only() {
+        assert_eq!(same_site_path("/books?q=a").as_deref(), Some("/books?q=a"));
+        for bad in [
+            "",
+            "books",
+            "//evil.example",
+            "https://evil.example",
+            "/\\evil.example",
+            "/\tevil",
+        ] {
+            assert!(same_site_path(bad).is_none(), "{bad:?}");
+        }
+    }
+
+    #[test]
     fn a_page_declares_its_own_assets() {
-        let chrome = Chrome::new("x", "dev", Assets::default(), true, None)
-            .stylesheet("/static/kernel/x.css?v=1".into())
-            .script("/static/kernel/x.js?v=1".into());
+        let chrome = Chrome::new(
+            "x",
+            "dev",
+            Assets::default(),
+            true,
+            None,
+            ThemeSwitch::default(),
+        )
+        .stylesheet("/static/kernel/x.css?v=1".into())
+        .script("/static/kernel/x.js?v=1".into());
         assert_eq!(chrome.stylesheets, ["/static/kernel/x.css?v=1"]);
         assert_eq!(chrome.scripts, ["/static/kernel/x.js?v=1"]);
     }

@@ -26,6 +26,7 @@ use crate::{
     error::AppError,
     kernel::{
         flash::{Flash, RequestFlash},
+        theme::ThemeSwitch,
         ui::{self, Chrome},
     },
     state::AppState,
@@ -72,7 +73,7 @@ pub async fn guard(
     let exempt = path.starts_with("/static/")
         || path == "/up"
         || matches!(path, "/dev/introspect.json" | "/dev/reload")
-        || (req.method() == Method::POST && path == "/dev/migrations");
+        || (req.method() == Method::POST && matches!(path, "/dev/migrations" | "/theme"));
     if exempt {
         return next.run(req).await;
     }
@@ -97,6 +98,7 @@ pub async fn guard(
         state.assets.assets(),
         true,
         flash,
+        ThemeSwitch::new(req.headers(), &uri),
     );
     let mut response = ui::page(Pending {
         chrome,
@@ -113,15 +115,6 @@ pub struct RunForm {
     return_to: String,
 }
 
-/// Only same-site paths: no open redirects.
-fn safe_path(raw: &str) -> Option<String> {
-    let ok = raw.starts_with('/')
-        && !raw.starts_with("//")
-        && !raw.contains('\\')
-        && !raw.chars().any(char::is_control);
-    ok.then(|| raw.to_owned())
-}
-
 /// `POST /dev/migrations`: the Run button. Applies everything pending and goes back.
 pub async fn run(
     State(state): State<AppState>,
@@ -130,7 +123,7 @@ pub async fn run(
     let before = pending(&state.db).await?.len();
     Migrator::up(&state.db, None).await?;
     tracing::info!(count = before, "migrations run from the dev page");
-    let back = safe_path(&form.return_to).unwrap_or_else(|| "/dev/system".to_owned());
+    let back = ui::same_site_path(&form.return_to).unwrap_or_else(|| "/dev/system".to_owned());
     Ok((
         Flash::notice(format!(
             "Ran {before} migration{}.",
@@ -165,25 +158,6 @@ pub async fn wait_until_migrated(db: &DatabaseConnection, stop: impl Future<Outp
         tokio::select! {
             _ = &mut stop => return false,
             _ = tokio::time::sleep(Duration::from_secs(5)) => {}
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::safe_path;
-
-    #[test]
-    fn return_paths_are_same_site_only() {
-        assert_eq!(safe_path("/books?q=a").as_deref(), Some("/books?q=a"));
-        for bad in [
-            "",
-            "books",
-            "//evil.example",
-            "https://evil.example",
-            "/\\evil.example",
-        ] {
-            assert!(safe_path(bad).is_none(), "{bad:?}");
         }
     }
 }

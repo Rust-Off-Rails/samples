@@ -7,4 +7,5 @@ pub mod health;
 pub mod home;
 pub mod meta;
 pub mod migrations;
+pub mod theme;
 // samples: controller mods
