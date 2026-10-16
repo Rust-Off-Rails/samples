@@ -4,7 +4,7 @@
 {% include "kernel/jobs/_nav.html" %}
 <div class="page-head">
   <h1>Errors</h1>
-  <p class="muted">Retryable and discarded jobs, grouped by worker and the shape of their last error (numbers ignored).{% if !worker.is_empty() %} Worker <span class="mono">{{ worker }}</span> · <a href="{{ clear_href }}">all workers</a>{% endif %}</p>
+  <p class="muted">Retryable and discarded jobs, grouped by worker and the root cause of their last error (the innermost error, numbers ignored, and the host it names); what differs around it is listed as variants.{% if !worker.is_empty() %} Worker <span class="mono">{{ worker }}</span> · <a href="{{ clear_href }}">all workers</a>{% endif %}</p>
 </div>
 {% if groups.is_empty() %}
 <section class="panel"><p class="empty big">Nothing is failing. Jobs that error show up here, grouped, so one bad deploy reads as one problem.</p></section>
@@ -15,6 +15,7 @@
     <div class="g-count"><span class="n">{{ g.count }}</span><span class="muted small">{% if g.count == "1" %}job{% else %}jobs{% endif %}</span></div>
     <div class="g-body">
       <p class="g-msg mono">{{ g.message }}</p>
+      {% if !g.variants.is_empty() %}<p class="g-meta muted small mono">{{ g.variants }}</p>{% endif %}
       <p class="g-meta muted small"><a class="mono" href="{{ g.worker_href }}">{{ g.worker }}</a> · {% if g.retryable > 0 %}{{ g.retryable }} retrying{% endif %}{% if g.retryable > 0 && g.discarded > 0 %}, {% endif %}{% if g.discarded > 0 %}{{ g.discarded }} discarded{% endif %} · first {{ g.first_seen }} · last <time title="{{ g.last_seen_utc }}">{{ g.last_seen }}</time></p>
     </div>
     <div class="g-actions">

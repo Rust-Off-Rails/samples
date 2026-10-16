@@ -883,6 +883,8 @@ pub struct ErrorGroupView {
     pub list_href: String,
     /// Bulk-retry form fields for the group's discarded jobs, when they can be targeted.
     pub retry_error: String,
+    /// "3 variants: order.paid, order.refunded, customer.updated" (empty for one variant).
+    pub variants: String,
 }
 
 pub fn error_groups(groups: Vec<ErrorGroup>, now: DateTime<Utc>) -> Vec<ErrorGroupView> {
@@ -904,6 +906,25 @@ pub fn error_groups(groups: Vec<ErrorGroup>, now: DateTime<Utc>) -> Vec<ErrorGro
                 last_seen: g.last_seen.map(|t| ui::ago(t, now)).unwrap_or_default(),
                 last_seen_utc: g.last_seen.map(ui::utc).unwrap_or_default(),
                 retry_error: search,
+                variants: if g.variant_count > 1 {
+                    let more = g.variant_count.saturating_sub(g.variants.len());
+                    format!(
+                        "{} variants: {}{}",
+                        g.variant_count,
+                        g.variants
+                            .iter()
+                            .map(|v| if v.is_empty() { "(none)" } else { v.as_str() })
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        if more > 0 {
+                            format!(" and {more} more")
+                        } else {
+                            String::new()
+                        }
+                    )
+                } else {
+                    String::new()
+                },
                 message: g.message,
                 worker: g.worker,
             }

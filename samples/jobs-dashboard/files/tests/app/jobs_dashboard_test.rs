@@ -491,9 +491,9 @@ async fn the_errors_page_groups_failures_and_offers_a_bulk_retry() {
     drain(app.db()).await;
     let res = app.get("/admin/jobs/errors").await;
     res.assert_ok()
-        .assert_text("charging card N: connection refused")
+        .assert_text("connection refused")
         .assert_contains(">3<")
-        .assert_contains("worker=fail&#38;error=charging%20card")
+        .assert_contains("worker=fail&#38;error=connection%20refused")
         .assert_text("Retry discarded");
     // Its bulk retry goes through the confirmation like every bulk action.
     let confirm = app
@@ -504,7 +504,7 @@ async fn the_errors_page_groups_failures_and_offers_a_bulk_retry() {
                 ("all_matching", "1"),
                 ("state", "discarded"),
                 ("worker", "fail"),
-                ("error", "charging card"),
+                ("error", "connection refused"),
                 ("return_to", "/admin/jobs/errors"),
             ],
         )
