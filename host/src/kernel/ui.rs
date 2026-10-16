@@ -17,7 +17,8 @@ use crate::config::APP_NAME;
 use crate::kernel::assets::Assets;
 use crate::kernel::flash::FlashMessage;
 
-/// When this process booted (uptime on `/dev/system`).
+/// When this process booted (uptime on `/dev/system`). `AppState::new` forces it, so it is the
+/// boot time, not the time of the first read.
 pub static BOOTED_AT: LazyLock<DateTime<Utc>> = LazyLock::new(Utc::now);
 
 /// Every response of a kernel router (pages, fragments, redirects, JSON, downloads) is
