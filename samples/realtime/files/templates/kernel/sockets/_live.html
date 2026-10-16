@@ -10,7 +10,7 @@
   <section class="panel">
     <header><h2>Topics</h2><span class="muted">{{ live.snap.topics.len() }}</span></header>
     {% if live.snap.topics.is_empty() %}<p class="empty">No topics. Open <a href="/live">the live room</a> in two browsers.</p>{% else %}
-    <div class="scroll"><table>
+    <div class="scroll" tabindex="0" role="region" aria-label="Topics"><table>
       <thead><tr><th>Topic</th><th>Here</th><th>Local conns</th><th>Broadcasts</th><th>Room</th></tr></thead>
       <tbody>
       {% for t in live.snap.topics %}
@@ -37,7 +37,7 @@
 <section class="panel">
   <header><h2>Connections</h2><span class="muted">select one for its frames</span></header>
   {% if live.snap.conns.is_empty() %}<p class="empty">No open connections.</p>{% else %}
-  <div class="scroll"><table>
+  <div class="scroll" tabindex="0" role="region" aria-label="Connections"><table>
     <thead><tr><th>#</th><th>Person</th><th>Transport</th><th>Topics</th><th>Age</th><th>In</th><th>Out</th></tr></thead>
     <tbody>
     {% for c in live.snap.conns %}
@@ -60,7 +60,7 @@
 <section class="panel">
   <header><h2>Frames of #{{ sel.id }} ({{ sel.label }}, {{ sel.transport }})</h2><a class="btn quiet" href="/dev/sockets">Close</a></header>
   {% if !live.snap.logging %}<p class="empty">Frame logging is off.</p>{% else if sel.log.is_empty() %}<p class="empty">No frames yet.</p>{% else %}
-  <ol class="frames">
+  <ol class="frames" tabindex="0" aria-label="Frames, newest first">
     {% for f in sel.log %}<li class="frame frame-{{ f.dir }}"><span class="dir" aria-label="{{ f.dir }}">{% if f.dir == "in" %}&uarr;{% else %}&darr;{% endif %}</span><time class="muted">{{ f.at.format("%H:%M:%S%.3f") }}</time><code>{{ f.text }}</code></li>{% endfor %}
   </ol>
   {% endif %}

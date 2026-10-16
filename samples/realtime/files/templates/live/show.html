@@ -24,7 +24,8 @@
   </div>
 
   <div class="grid gap-4 md:grid-cols-[13rem_minmax(0,1fr)]">
-    <aside aria-labelledby="here-heading" class="rounded-lg border border-gray-200 p-4 dark:border-gray-800">
+    {# On phones the conversation comes first and who's here follows it. #}
+    <aside aria-labelledby="here-heading" class="order-2 rounded-lg border border-gray-200 p-4 md:order-none dark:border-gray-800">
       <h2 id="here-heading" class="text-sm font-semibold">Here now <span data-count class="font-normal text-gray-600 dark:text-gray-400"></span></h2>
       <ul data-presence class="mt-3 flex flex-wrap gap-3 md:flex-col"></ul>
       <div class="mt-4 border-t border-gray-200 pt-3 text-xs text-gray-700 dark:border-gray-800 dark:text-gray-300">

@@ -263,18 +263,52 @@ impl Outgoing {
     }
 }
 
+/// Server frames are structs, so `t` comes first and the fields keep the protocol's order (a
+/// `json!` map would sort them).
+#[derive(Serialize)]
+struct EventFrame<'a> {
+    t: &'static str,
+    topic: &'a str,
+    event: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    seq: Option<i64>,
+    data: &'a Payload,
+}
+
+#[derive(Serialize)]
+struct PresenceFrame<'a> {
+    t: &'static str,
+    topic: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    here: Option<&'a Payload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    joins: Option<Payload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    leaves: Option<Payload>,
+}
+
+fn frame_of<T: Serialize>(value: &T) -> Frame {
+    serde_json::to_string(value).unwrap_or_default().into()
+}
+
 pub fn event_frame(topic: &str, seq: Option<i64>, event: &str, data: &Payload) -> Frame {
-    let mut v = json!({ "t": "event", "topic": topic, "event": event, "data": data });
-    if let Some(seq) = seq {
-        v["seq"] = json!(seq);
-    }
-    v.to_string().into()
+    frame_of(&EventFrame {
+        t: "event",
+        topic,
+        event,
+        seq,
+        data,
+    })
 }
 
 pub fn presence_here_frame(topic: &str, here: &Payload) -> Frame {
-    json!({ "t": "presence", "topic": topic, "here": here })
-        .to_string()
-        .into()
+    frame_of(&PresenceFrame {
+        t: "presence",
+        topic,
+        here: Some(here),
+        joins: None,
+        leaves: None,
+    })
 }
 
 pub fn presence_diff_frame(
@@ -285,9 +319,13 @@ pub fn presence_diff_frame(
     let obj = |items: &[(String, Payload)]| {
         Payload::Object(items.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
     };
-    json!({ "t": "presence", "topic": topic, "joins": obj(joins), "leaves": obj(leaves) })
-        .to_string()
-        .into()
+    frame_of(&PresenceFrame {
+        t: "presence",
+        topic,
+        here: None,
+        joins: Some(obj(joins)),
+        leaves: Some(obj(leaves)),
+    })
 }
 
 /// `{"event": name, "data": {…}}` (a serde tag/content enum) → (name, data).
@@ -1608,6 +1646,27 @@ mod tests {
         hub.log_frame(guard.info(), "in", &"é".repeat(1000));
         let last = lock(&guard.info().log).back().unwrap().text.clone();
         assert!(last.len() <= FRAME_LOG_TEXT + "…".len() && last.ends_with('…'));
+    }
+
+    #[test]
+    fn frames_start_with_their_type() {
+        let ev = event_frame("room:a", Some(3), "message", &json!({ "b": 1, "a": 2 }));
+        assert_eq!(
+            ev.as_str(),
+            r#"{"t":"event","topic":"room:a","event":"message","seq":3,"data":{"a":2,"b":1}}"#
+        );
+        let typing = event_frame("room:a", None, "typing", &json!({}));
+        assert!(!typing.contains("seq"), "ephemeral events carry no cursor");
+        let here = presence_here_frame("room:a", &json!({}));
+        assert_eq!(
+            here.as_str(),
+            r#"{"t":"presence","topic":"room:a","here":{}}"#
+        );
+        let diff = presence_diff_frame("room:a", &[("1".into(), json!({}))], &[]);
+        assert_eq!(
+            diff.as_str(),
+            r#"{"t":"presence","topic":"room:a","joins":{"1":{}},"leaves":{}}"#
+        );
     }
 
     #[tokio::test]

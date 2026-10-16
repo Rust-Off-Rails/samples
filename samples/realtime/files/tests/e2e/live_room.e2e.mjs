@@ -29,7 +29,12 @@ const errors = [];
 async function person(name, { block = [] } = {}) {
   const context = await browser.createBrowserContext();
   const page = await context.newPage();
-  page.on("console", (m) => { if (m.type() === "error") errors.push(`${name}: ${m.text()}`); });
+  page.on("console", (m) => {
+    if (m.type() !== "error") return;
+    // The requests this test blocks on purpose fail loudly; anything else is a real error.
+    if (block.includes("sse") && (m.location()?.url ?? "").includes("/socket/sse")) return;
+    errors.push(`${name}: ${m.text()}`);
+  });
   page.on("pageerror", (e) => errors.push(`${name}: ${e.message}`));
   if (block.includes("websocket")) {
     // A proxy that kills WebSockets: the socket closes before it opens.

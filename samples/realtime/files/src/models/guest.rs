@@ -118,7 +118,7 @@ mod tests {
 
     #[test]
     fn initials_come_from_the_first_and_last_words() {
-        assert_eq!(initials("Avery Quinn"), "AL");
+        assert_eq!(initials("Avery Quinn"), "AQ");
         assert_eq!(initials("blake river stone"), "BS");
         assert_eq!(initials("Casey"), "CA");
         assert_eq!(initials(""), "?");

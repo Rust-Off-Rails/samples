@@ -18,6 +18,8 @@ export async function login(page, base) {
 }
 
 export async function loggedIn(page) {
+  // Signed out, the room redirects to the sign-in page.
+  await page.goto(`${new URL(page.url()).origin}/live/lobby`, { waitUntil: "load" });
   return (await page.$("[data-live-room]")) !== null;
 }
 
