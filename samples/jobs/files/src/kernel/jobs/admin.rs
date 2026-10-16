@@ -751,7 +751,8 @@ pub struct JobFilter {
     pub queue: Option<String>,
     pub worker: Option<String>,
     pub tag: Option<String>,
-    /// An id (all digits), or text found in args or the worker name.
+    /// An id (all digits), or text in the worker or queue name, or in the args as every view
+    /// shows them (redacted: a secret's value is never searchable).
     pub q: Option<String>,
     /// Text found in the recorded errors.
     pub error: Option<String>,
@@ -794,7 +795,43 @@ fn text_like(col: job::Column, pattern: String) -> sea_orm::sea_query::SimpleExp
     .like(LikeExpr::new(pattern).escape('\\'))
 }
 
-fn condition(filter: &JobFilter) -> Condition {
+/// How many of the newest jobs whose raw args contain the search text are checked again on their
+/// redacted args. APP: raise it if your operators search far back.
+const ARGS_SEARCH_SCAN: u64 = 5_000;
+
+/// Ids of jobs whose **redacted** args contain `q` (case-insensitive), among the newest
+/// `ARGS_SEARCH_SCAN` whose raw args do (the SQL narrows, the redacted copy decides).
+// SECURITY: matching raw args would let a search probe a redacted value character by character
+// ("does any job's api_key start with sk_live_a?"): only what the views show is searchable
+// (test: search_never_matches_redacted_values)
+async fn ids_with_text_in_redacted_args(
+    db: &DatabaseConnection,
+    q: &str,
+) -> Result<Vec<i64>, DbErr> {
+    let rows: Vec<(i64, serde_json::Value)> = job::Entity::find()
+        .select_only()
+        .column(job::Column::Id)
+        .column(job::Column::Args)
+        .filter(text_like(job::Column::Args, like_pattern(q)))
+        .order_by_desc(job::Column::Id)
+        .limit(ARGS_SEARCH_SCAN)
+        .into_tuple()
+        .all(db)
+        .await?;
+    let needle = q.to_lowercase();
+    Ok(rows
+        .into_iter()
+        .filter(|(_, args)| {
+            super::redact(args)
+                .to_string()
+                .to_lowercase()
+                .contains(&needle)
+        })
+        .map(|(id, _)| id)
+        .collect())
+}
+
+async fn condition(db: &DatabaseConnection, filter: &JobFilter) -> Result<Condition, DbErr> {
     let mut cond = Condition::all();
     if let Some(state) = filter.state {
         cond = cond.add(job::Column::State.eq(state));
@@ -824,10 +861,12 @@ fn condition(filter: &JobFilter) -> Condition {
             }
             _ => {
                 // WHY: values, not JSON fragments: Postgres may re-render JSON with spaces.
+                let in_args = ids_with_text_in_redacted_args(db, q).await?;
                 cond = cond.add(
                     Condition::any()
-                        .add(text_like(job::Column::Args, like_pattern(q)))
-                        .add(text_like(job::Column::Worker, like_pattern(q))),
+                        .add(job::Column::Id.is_in(in_args))
+                        .add(text_like(job::Column::Worker, like_pattern(q)))
+                        .add(text_like(job::Column::Queue, like_pattern(q))),
                 );
             }
         }
@@ -840,7 +879,7 @@ fn condition(filter: &JobFilter) -> Condition {
     {
         cond = cond.add(text_like(job::Column::Errors, like_pattern(e)));
     }
-    cond
+    Ok(cond)
 }
 
 /// Newest first, keyset paginated (`id < before_id`).
@@ -850,7 +889,7 @@ pub async fn list(
     before_id: Option<i64>,
     limit: u64,
 ) -> Result<Vec<job::Model>, DbErr> {
-    let mut query = job::Entity::find().filter(condition(filter));
+    let mut query = job::Entity::find().filter(condition(db, filter).await?);
     if let Some(before) = before_id {
         query = query.filter(job::Column::Id.lt(before));
     }
@@ -863,7 +902,7 @@ pub async fn list(
 
 pub async fn count_matching(db: &DatabaseConnection, filter: &JobFilter) -> Result<u64, DbErr> {
     job::Entity::find()
-        .filter(condition(filter))
+        .filter(condition(db, filter).await?)
         .count(db)
         .await
 }
@@ -881,7 +920,7 @@ pub async fn state_counts(
         .select_only()
         .column(job::Column::State)
         .column_as(Expr::expr(Func::count(Expr::col(job::Column::Id))), "n")
-        .filter(condition(&without_state))
+        .filter(condition(db, &without_state).await?)
         .group_by(job::Column::State)
         .into_tuple()
         .all(db)
@@ -1117,7 +1156,7 @@ pub async fn matching_ids(db: &DatabaseConnection, filter: &JobFilter) -> Result
     job::Entity::find()
         .select_only()
         .column(job::Column::Id)
-        .filter(condition(filter))
+        .filter(condition(db, filter).await?)
         .order_by_desc(job::Column::Id)
         .limit(BULK_CAP)
         .into_tuple()

@@ -63,6 +63,11 @@ fn dispatcher(log: Log) -> DispatchFn {
                             "POST https://hooks.partner.invalid/v2/events ({event})"
                         )))
                 }
+                // An error that quotes the URL that failed, credentials and all.
+                "leak" => {
+                    let url = args["url"].as_str().unwrap_or_default().to_owned();
+                    Err(anyhow::anyhow!("401 Unauthorized").context(format!("GET {url}")))
+                }
                 "snooze" => Ok(Outcome::Snooze(chrono::Duration::minutes(5))),
                 "cancel" => Ok(Outcome::Cancel("order 7 was deleted".into())),
                 "discard" => Ok(Outcome::Discard("invalid address".into())),
@@ -1021,6 +1026,99 @@ async fn bulk_actions_refuse_an_empty_filter() {
             .await
             .unwrap(),
         3
+    );
+}
+
+/// Security: a failure message quoting a URL with credentials is stored (and logged) redacted, in
+/// the one-line error and in the full report, so the dashboard, search and `app jobs show` never
+/// see the secret.
+#[tokio::test]
+async fn job_errors_are_stored_redacted() {
+    let app = TestApp::new().await;
+    let url = "https://deploy:hunter2@api.example.com/v1/charges?token=tok_live_abc123&page=2";
+    let id = insert(app.db(), builder_with("leak", json!({ "url": url }))).await;
+    drain(&app).await;
+    let stored = get(app.db(), id).await.errors.to_string();
+    for secret in ["hunter2", "deploy:", "tok_live_abc123"] {
+        assert!(!stored.contains(secret), "{secret} stored in {stored}");
+    }
+    assert!(
+        stored.contains("https://[redacted]@api.example.com/v1/charges?token=[redacted]&page=2"),
+        "{stored}"
+    );
+    assert!(
+        stored.contains("401 Unauthorized"),
+        "the cause stays readable"
+    );
+    // Search can't find the secret through the errors either.
+    let by_error = JobFilter {
+        error: Some("hunter2".into()),
+        ..Default::default()
+    };
+    assert!(
+        admin::list(app.db(), &by_error, None, 50)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// Security: `q` matches args only as every view shows them (redacted). Matching the raw args
+/// would answer "is there a job whose api_key starts with sk_live_a?", one character at a time.
+#[tokio::test]
+async fn search_never_matches_redacted_values() {
+    let app = TestApp::new().await;
+    let id = insert(
+        app.db(),
+        builder_with(
+            "ok",
+            json!({ "order_id": 7781, "api_key": "TOPSECRET99", "nested": { "password": "swordfish" } }),
+        )
+        .queue("billing"),
+    )
+    .await;
+    let q = |q: &str| JobFilter {
+        q: Some(q.into()),
+        ..Default::default()
+    };
+    for secret in ["TOPSECRET99", "topsecret", "SECRET9", "swordfish", "fish"] {
+        let filter = q(secret);
+        assert!(
+            admin::list(app.db(), &filter, None, 50)
+                .await
+                .unwrap()
+                .is_empty(),
+            "{secret:?} matched through a redacted value"
+        );
+        assert_eq!(admin::count_matching(app.db(), &filter).await.unwrap(), 0);
+        assert!(
+            admin::matching_ids(app.db(), &filter)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            admin::state_counts(app.db(), &filter)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+    // What the views show stays searchable: keys, plain values, the worker, the queue, the id.
+    for shown in ["order_id", "order", "api_key", "billing", "ok"] {
+        let found = admin::list(app.db(), &q(shown), None, 50).await.unwrap();
+        assert_eq!(
+            found.iter().map(|j| j.id).collect::<Vec<_>>(),
+            [id],
+            "{shown:?}"
+        );
+    }
+    assert_eq!(
+        admin::list(app.db(), &q(&id.to_string()), None, 50)
+            .await
+            .unwrap()[0]
+            .id,
+        id
     );
 }
 
