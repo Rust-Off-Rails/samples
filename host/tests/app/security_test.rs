@@ -36,7 +36,8 @@ pub fn concrete(path: &str) -> String {
 
 async fn request(app: &TestApp, method: &str, path: &str) -> StatusCode {
     match method {
-        "GET" => app.get(path).await.status,
+        // WHY: headers only: a streaming route (SSE) never ends its body.
+        "GET" => app.request_head(path, &[]).await.0,
         _ => app.post_form(path, &[]).await.status,
     }
 }

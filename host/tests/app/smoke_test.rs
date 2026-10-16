@@ -142,18 +142,22 @@ async fn every_listed_route_is_routable_in_development() {
             .replace("{token}", "not-a-real-token")
             .replace("{mailer}", "no_such_mailer")
             .replace("{action}", "no_such_action");
-        let res = match *method {
-            "GET" => app.get(&path).await,
-            _ => app.post_form(&path, &[]).await,
+        // WHY: GETs read headers only: a streaming route (SSE) never ends its body.
+        let (status, headers) = match *method {
+            "GET" => app.request_head(&path, &[]).await,
+            _ => {
+                let res = app.post_form(&path, &[]).await;
+                (res.status, res.headers)
+            }
         };
         assert_ne!(
-            res.status,
+            status,
             StatusCode::METHOD_NOT_ALLOWED,
             "{method} {path} ({handler}) has no handler"
         );
         // A handler's own 404 is fine; the router fallback is "not routed".
         assert!(
-            res.headers.get(&ROUTE_FALLBACK).is_none(),
+            headers.get(&ROUTE_FALLBACK).is_none(),
             "{method} {path} ({handler}) is in ROUTES but not routed"
         );
     }
