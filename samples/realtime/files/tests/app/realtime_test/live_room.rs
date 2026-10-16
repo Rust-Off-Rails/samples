@@ -309,7 +309,10 @@ async fn the_live_room_and_dev_sockets_follow_the_theme_switch() {
             .assert_contains("data-theme-switch");
         let ann = guest(&app.state, &format!("Ann {theme}")).await;
         app.set_cookie("session_token", &ann.token);
-        app.get("/live/lobby").await.assert_ok().assert_contains(&tag);
+        app.get("/live/lobby")
+            .await
+            .assert_ok()
+            .assert_contains(&tag);
     }
     let css = std::fs::read_to_string("static/kernel/sockets.css").unwrap();
     assert!(
