@@ -11,7 +11,7 @@ use offrails_host::{
     models::{
         auth_event::{self, Kind, Meta},
         auth_throttle, pending_login, recovery_code, session, totp_credential, trusted_device,
-        user,
+        user, user_token,
     },
 };
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait, IntoActiveModel};
@@ -286,6 +286,26 @@ async fn a_recovery_code_works_only_once() {
         .await
         .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
     assert!(!signed_in(&app));
+}
+
+/// Two requests racing with the same recovery code: exactly one signs in.
+#[tokio::test]
+async fn a_recovery_code_used_twice_at_the_same_time_works_once() {
+    let app = TestApp::new().await;
+    let (ada, codes) = enrolled(&app, "ada@example.com").await;
+    first_factor(&app, &ada).await;
+    let form = [("code", codes[0].as_str())];
+    let (a, b) = tokio::join!(
+        app.post_form("/two-factor/recovery", &form),
+        app.post_form("/two-factor/recovery", &form)
+    );
+    let wins = [&a, &b]
+        .iter()
+        .filter(|r| r.status == StatusCode::SEE_OTHER && r.location() == Some("/account"))
+        .count();
+    assert_eq!(wins, 1, "statuses: {} and {}", a.status, b.status);
+    assert_eq!(session::all_for(app.db(), &ada).await.unwrap().len(), 1);
+    assert_eq!(recovery_code::remaining(app.db(), ada.id).await.unwrap(), 9);
 }
 
 #[tokio::test]
@@ -637,30 +657,124 @@ async fn forgetting_another_users_trusted_device_is_404() {
 async fn credential_changes_and_not_me_forget_trusted_devices() {
     let app = TestApp::new().await;
     let (ada, _) = enrolled(&app, "ada@example.com").await;
+    let none_trusted = async || {
+        trusted_device::all_for(app.db(), &ada, Utc::now())
+            .await
+            .unwrap()
+            .is_empty()
+    };
+
+    // "This wasn't me", through its link.
+    trusted_device::trust(app.db(), ada.id, None, None, Utc::now())
+        .await
+        .unwrap();
+    let not_me = user_token::issue(
+        app.db(),
+        ada.id,
+        user_token::Purpose::NotMe,
+        &ada.email,
+        None,
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    app.post_form(&format!("/security/not-me/{not_me}"), &[])
+        .await
+        .assert_redirect_to("/session/new");
+    assert!(none_trusted().await, "not-me forgets trusted devices");
+
+    // A password change or reset (the helpers they call).
     trusted_device::trust(app.db(), ada.id, None, None, Utc::now())
         .await
         .unwrap();
     let txn = offrails_host::kernel::db::begin(app.db()).await.unwrap();
     auth::revoke_everything(&txn, ada.id).await.unwrap();
     txn.commit().await.unwrap();
-    assert!(
-        trusted_device::all_for(app.db(), &ada, Utc::now())
-            .await
-            .unwrap()
-            .is_empty()
-    );
-
+    assert!(none_trusted().await);
     trusted_device::trust(app.db(), ada.id, None, None, Utc::now())
         .await
         .unwrap();
     let txn = offrails_host::kernel::db::begin(app.db()).await.unwrap();
     auth::revoke_other_access(&txn, &ada, 0).await.unwrap();
     txn.commit().await.unwrap();
+    assert!(none_trusted().await);
+
+    // Turning two-factor off, through its route.
+    trusted_device::trust(app.db(), ada.id, None, None, Utc::now())
+        .await
+        .unwrap();
+    app.sign_in_as(&ada).await;
+    app.post_form("/account/two-factor/delete", &[])
+        .await
+        .assert_redirect_to("/account");
+    assert!(none_trusted().await, "turning two-factor off forgets them");
     assert!(
-        trusted_device::all_for(app.db(), &ada, Utc::now())
+        !totp_credential::enabled_for(app.db(), ada.id)
+            .await
+            .unwrap()
+    );
+    assert_eq!(recovery_code::remaining(app.db(), ada.id).await.unwrap(), 0);
+}
+
+/// An unverified account claimed by its address's owner (auth-magic-link) loses any two-factor
+/// set up on it before: it may be the attacker's.
+#[tokio::test]
+async fn claiming_an_unverified_account_drops_its_two_factor() {
+    let app = TestApp::new().await;
+    let u = user::find_or_create(app.db(), "ada@example.com", Utc::now())
+        .await
+        .unwrap();
+    assert!(!u.is_verified());
+    totp_credential::pending_for(app.db(), &app.state.config.totp, u.id, Utc::now())
+        .await
+        .unwrap();
+    totp_credential::enable(app.db(), u.id, Utc::now())
+        .await
+        .unwrap();
+    recovery_code::regenerate(
+        app.db(),
+        &app.state.config.auth.secret_key,
+        u.id,
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    trusted_device::trust(app.db(), u.id, None, None, Utc::now())
+        .await
+        .unwrap();
+    let txn = offrails_host::kernel::db::begin(app.db()).await.unwrap();
+    assert!(
+        auth::claim_unverified_account(&txn, u.id, Utc::now())
+            .await
+            .unwrap()
+    );
+    txn.commit().await.unwrap();
+    assert!(
+        totp_credential::find_for(app.db(), u.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(recovery_code::remaining(app.db(), u.id).await.unwrap(), 0);
+    assert!(
+        trusted_device::all_for(app.db(), &u, Utc::now())
             .await
             .unwrap()
             .is_empty()
+    );
+    // A verified account is never claimed: its two-factor stays.
+    let (ada, _) = enrolled(&app, "verified@example.com").await;
+    let txn = offrails_host::kernel::db::begin(app.db()).await.unwrap();
+    assert!(
+        !auth::claim_unverified_account(&txn, ada.id, Utc::now())
+            .await
+            .unwrap()
+    );
+    txn.commit().await.unwrap();
+    assert!(
+        totp_credential::enabled_for(app.db(), ada.id)
+            .await
+            .unwrap()
     );
 }
 
