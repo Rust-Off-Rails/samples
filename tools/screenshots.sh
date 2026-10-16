@@ -20,7 +20,8 @@ base=$(cat demo/demo.url)
 installed=$(sed -n 's/^.*: installed sample \([^ ]*\) .*$/\1/p' demo/app/docs/decisions.md | sort -u | tr '\n' ' ')
 echo "demo: $base; installed: $installed"
 (cd tools/screenshots && pnpm install --frozen-lockfile --silent)
-BASE="$base" OUT="$root/docs/screenshots" INSTALLED="$installed" node tools/screenshots/shoot.mjs "$@"
+# The jobs dashboard first: its running and retrying examples are seeded (app task jobs_demo) and
+# the demo's workers finish them within minutes. A demo running for a while: restart it first.
 if [ $# -eq 0 ] || printf '%s\n' "$@" | grep -qx jobs-dashboard; then
   case " $installed " in
     *" jobs-dashboard "*)
@@ -28,3 +29,4 @@ if [ $# -eq 0 ] || printf '%s\n' "$@" | grep -qx jobs-dashboard; then
       ;;
   esac
 fi
+BASE="$base" OUT="$root/docs/screenshots" INSTALLED="$installed" node tools/screenshots/shoot.mjs "$@"
