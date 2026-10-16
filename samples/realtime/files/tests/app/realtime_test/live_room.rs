@@ -238,13 +238,13 @@ async fn dev_sockets_shows_connections_topics_presence_and_frames() {
     page.assert_ok()
         .assert_contains("/static/kernel/sockets.css?v=")
         .assert_text("room:lobby")
-        .assert_text("Ann Example")
+        .assert_text(&ann.name)
         .assert_contains("websocket")
         .assert_contains(r#"hx-trigger="every 2s""#);
     let snap: Value = app.get("/dev/sockets.json").await.json();
     let conn = snap["conns"][0]["id"].as_u64().unwrap();
     assert_eq!(snap["conns"][0]["transport"], "websocket");
-    assert_eq!(snap["topics"][0]["people"], json!(["Ann Example"]));
+    assert_eq!(snap["topics"][0]["people"], json!([ann.name]));
     let frames = app.get(&format!("/dev/sockets?conn={conn}")).await;
     frames
         .assert_ok()

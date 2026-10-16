@@ -20,31 +20,15 @@ use crate::state::AppState;
 /// Accounts sign in through auth-core (`/session/new`); there are no development guests.
 pub const DEV_GUESTS: bool = false;
 
-/// What others in a room see: a display name made from the address's local part
-/// (`ada.lovelace@…` is "Ada Lovelace"), never the address itself.
-/// APP: your users' display name column, when you add one.
-// SECURITY: presence and messages carry this name, never an email
+/// What others in a room see. auth-core's users have no name column, so this is a neutral
+/// "Member 42": never the address, and never a name guessed from it (`ada.lovelace@…` would
+/// show "Ada Lovelace", and many addresses are a full name, an employer or worse).
+/// APP: once users have a display name (a `name` column people chose), return it here, falling
+/// back to this.
+// SECURITY: presence and messages carry this name, never an email or anything derived from one
 // (test: an_accounts_presence_shows_a_name_never_the_email).
 pub fn display_name(u: &user::Model) -> String {
-    let local = u.email.split('@').next().unwrap_or_default();
-    let local = local.split('+').next().unwrap_or_default();
-    let words: Vec<String> = local
-        .split(['.', '_', '-'])
-        .filter(|w| !w.is_empty())
-        .map(|w| {
-            let mut chars = w.chars();
-            chars.next().map_or_else(String::new, |c| {
-                c.to_uppercase()
-                    .chain(chars.flat_map(char::to_lowercase))
-                    .collect()
-            })
-        })
-        .collect();
-    if words.is_empty() {
-        format!("Member {}", u.id)
-    } else {
-        words.join(" ")
-    }
+    format!("Member {}", u.id)
 }
 
 fn signed(s: session::Model, u: user::Model) -> Signed {

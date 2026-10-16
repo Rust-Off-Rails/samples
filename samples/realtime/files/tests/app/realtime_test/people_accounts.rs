@@ -13,8 +13,9 @@ use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, sea_que
 /// Keeps addresses unique when a test names two people alike.
 static NEXT: AtomicU64 = AtomicU64::new(1);
 
-/// A new account whose display name is `name` ("Ann Example" is ann.example+N@example.com), signed
-/// in: `(id, display name, session id, raw token)`.
+/// A new account for `name` ("Ann Example" is ann.example+N@example.com), signed in:
+/// `(id, display name, session id, raw token)`. The display name is the account's ("Member N"),
+/// never `name`: assert against what this returns.
 pub async fn create(state: &AppState, name: &str) -> (i64, String, i64, String) {
     let local: String = name
         .to_lowercase()

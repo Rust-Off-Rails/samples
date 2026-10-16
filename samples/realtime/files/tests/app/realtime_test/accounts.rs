@@ -3,7 +3,10 @@
 //! auth-core closes that session's sockets at once, presence shows a name and never the address,
 //! and the development guest pages send people to sign in.
 
+use axum::http::{HeaderMap, HeaderValue, header};
 use offrails_host::config::{AppEnv, Config};
+use offrails_host::controllers::auth::{self, RequestMeta};
+use offrails_host::models::{auth_event::Meta, user};
 use serde_json::json;
 
 use super::client::{Ws, guest, serve};
@@ -44,21 +47,48 @@ async fn signing_out_everywhere_else_closes_the_other_devices_sockets() {
     assert_eq!(laptop.request(json!({ "t": "ping" })).await["t"], "pong");
 }
 
+/// A shared computer: Bob signs in where Ann's session still was. Ann's session is replaced, and
+/// her open sockets close at once instead of at their next re-check.
+#[tokio::test]
+async fn signing_in_over_a_session_closes_its_sockets() {
+    let app = TestApp::new().await;
+    let ann = guest(&app.state, "Ann").await;
+    let bob = guest(&app.state, "Bob").await;
+    let (addr, _server) = serve(app.state.clone()).await;
+    let mut anns_tab = Ws::as_guest(addr, &ann).await;
+    anns_tab.join("room:lobby", None).await.unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::COOKIE,
+        HeaderValue::from_str(&format!("session_token={}", ann.token)).unwrap(),
+    );
+    let meta = RequestMeta {
+        meta: Meta::default(),
+        device: None,
+    };
+    let bob_user = user::find_self(&app.state.db, bob.id).await.unwrap();
+    auth::sign_in(&app.state, &headers, &meta, bob_user, "test")
+        .await
+        .unwrap();
+    assert_eq!(anns_tab.closed().await, (4401, Some("revoked".into())));
+}
+
 #[tokio::test]
 async fn an_accounts_presence_shows_a_name_never_the_email() {
     let app = TestApp::new().await;
+    // The address is ada.lovelace+N@example.com: nothing of it may show, not even the local part
+    // turned into a name (people pick addresses like firstname.lastname, or worse).
     let ada = guest(&app.state, "Ada Lovelace").await;
-    assert_eq!(ada.name, "Ada Lovelace");
+    assert_eq!(ada.name, format!("Member {}", ada.id));
     let (addr, _server) = serve(app.state.clone()).await;
     let mut ws = Ws::as_guest(addr, &ada).await;
     ws.join("room:lobby", None).await.unwrap();
     let here = ws.presence("room:lobby").await;
-    let text = here.to_string();
-    assert!(
-        !text.contains('@') && !text.contains("example.com"),
-        "{text}"
-    );
-    assert_eq!(here["here"][ada.key()]["name"], "Ada Lovelace");
+    let text = here.to_string().to_lowercase();
+    for leak in ["@", "example.com", "ada", "lovelace"] {
+        assert!(!text.contains(leak), "{leak} in {text}");
+    }
+    assert_eq!(here["here"][ada.key()]["name"], ada.name.as_str());
 }
 
 #[tokio::test]
@@ -84,6 +114,6 @@ async fn with_accounts_the_guest_pages_send_people_to_sign_in() {
     app.get("/live/lobby")
         .await
         .assert_ok()
-        .assert_text("Ann")
+        .assert_text(&ann.name)
         .assert_not_contains("/dev/guests/sign-out");
 }

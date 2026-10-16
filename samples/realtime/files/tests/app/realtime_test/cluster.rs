@@ -75,7 +75,7 @@ async fn presence_messages_and_typing_cross_nodes() {
 
     wb.push("room:lobby", "typing", json!({})).await.unwrap();
     let typing = wa.event("room:lobby", "typing").await;
-    assert_eq!(typing["data"]["name"], "Bob");
+    assert_eq!(typing["data"]["name"], bob.name.as_str());
 }
 
 #[tokio::test]
@@ -146,7 +146,7 @@ async fn a_dead_nodes_people_leave_after_its_heartbeats_stop() {
             v["t"] == "presence" && v["leaves"].get(bob.key()).is_some()
         })
         .await;
-    assert_eq!(left["leaves"][bob.key()]["name"], "Bob");
+    assert_eq!(left["leaves"][bob.key()]["name"], bob.name.as_str());
     assert!(a.hub.is_present("room:lobby", &ann.key()));
     drop(wb);
 }
@@ -205,7 +205,7 @@ async fn a_node_that_starts_later_learns_who_is_here() {
     let here = wb.presence("room:lobby").await;
     assert_eq!(
         here["here"][ann.key()]["name"],
-        "Ann",
+        ann.name.as_str(),
         "two people, two nodes"
     );
     assert_eq!(here["here"].as_object().unwrap().len(), 2);
