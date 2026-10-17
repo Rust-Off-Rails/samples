@@ -253,3 +253,42 @@ async fn robots_and_sitemap_are_absolute_and_exclude_private_pages() {
         .assert_contains(&format!("<loc>{base}/</loc>"))
         .assert_not_contains("/dev");
 }
+
+/// The app layout boosts every link (`hx-boost="true"`): a boosted click swaps `<body>` and runs
+/// nothing in the next page's `<head>`. So no page that extends the app layout loads a script or
+/// a stylesheet in its `{% block head %}`; samples wire theirs at `samples: app head`, where every
+/// page loads them (samples/FORMAT.md#scripts-on-app-pages).
+#[test]
+fn app_pages_load_no_scripts_or_stylesheets_in_their_head_block() {
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("a templates dir").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|e| e == "html") {
+                out.push(path);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(std::path::Path::new("templates"), &mut files);
+    let mut found = Vec::new();
+    for path in files {
+        let source = std::fs::read_to_string(&path).expect("a readable template");
+        if !source.contains(r#"{% extends "layouts/application.html" %}"#) {
+            continue;
+        }
+        let Some(start) = source.find("{% block head %}") else {
+            continue;
+        };
+        let head = &source[start..];
+        let head = &head[..head.find("{% endblock %}").unwrap_or(head.len())];
+        if head.contains("<script") || head.contains("stylesheet") {
+            found.push(path.display().to_string());
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "a boosted link never runs these: load them from the layout (samples: app head): {found:?}"
+    );
+}

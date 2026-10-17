@@ -1,5 +1,5 @@
 // static/app.js: each behavior is one delegated listener, keyed by a data attribute. No inline
-// scripts (CSP): this file is the only JS the app layout loads.
+// scripts (CSP): the app's own JS (samples add theirs at `samples: app head` in the layout).
 document.addEventListener("click", (e) => {
   const el = e.target.closest("[data-toggle]");
   if (el) document.getElementById(el.dataset.toggle)?.classList.toggle("hidden");
