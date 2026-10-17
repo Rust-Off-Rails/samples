@@ -1753,7 +1753,11 @@ async fn the_ai_client_speaks_both_provider_shapes() {
     assert_eq!(b["messages"][0]["role"], "system");
     assert_eq!(b["messages"][1]["content"], "user");
     let claude = ai_config(AiProvider::Anthropic, "https://api.anthropic.com");
-    assert_eq!(ai::body(&claude, "s", "u")["fallbacks"], "default");
+    // Off unless the app opts in (ai::USE_FALLBACK): an unchecked beta must never break every ask.
+    assert_eq!(
+        ai::body(&claude, "s", "u").get("fallbacks").is_some(),
+        ai::USE_FALLBACK
+    );
 }
 
 /// Errors, a silent provider, an oversized answer and a redirect all end in a clear message;

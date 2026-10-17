@@ -67,6 +67,9 @@ pub const ANTHROPIC_VERSION: &str = "2023-06-01";
 /// the Claude API itself: the request is retried on a suitable model instead of stopping.
 const FALLBACK_MODELS: &[&str] = &["claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1"];
 const FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
+// APP: off by default. Turn it on once you've checked the beta name and `fallbacks` field against
+// Anthropic's current docs (betas change); with it off, a refusal shows as the provider's error.
+pub const USE_FALLBACK: bool = false;
 
 /// Whether the assistant may answer in this mode: always in development (it then explains how
 /// to configure itself when it isn't); in production only with `DASHBOARD_AI_IN_PRODUCTION=true`
@@ -383,7 +386,8 @@ pub fn endpoint(ai: &DashboardAi) -> String {
 }
 
 fn uses_fallback(ai: &DashboardAi) -> bool {
-    ai.provider == Some(AiProvider::Anthropic)
+    USE_FALLBACK
+        && ai.provider == Some(AiProvider::Anthropic)
         && ai.base_url.trim_end_matches('/') == "https://api.anthropic.com"
         && FALLBACK_MODELS.contains(&ai.model.as_str())
 }
