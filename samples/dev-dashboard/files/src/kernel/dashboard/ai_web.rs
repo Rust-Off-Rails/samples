@@ -102,7 +102,7 @@ pub fn bar(path_and_query: &str) -> Option<Bar> {
 }
 
 /// `/static/<key>?v=<digest>` (development only, so hashing the one small file is fine).
-fn asset(key: &str) -> String {
+pub fn asset(key: &str) -> String {
     use sha2::{Digest, Sha256};
     match std::fs::read(std::path::Path::new("static").join(key)) {
         Ok(bytes) => {

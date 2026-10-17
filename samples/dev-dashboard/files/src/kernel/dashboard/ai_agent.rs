@@ -45,7 +45,7 @@ pub const TOOL_TIMEOUT: Duration = Duration::from_secs(15);
 /// APP: runs kept on disk (`storage/dashboard/ai-runs/`), and each tool result's size there.
 pub const MAX_HISTORY: usize = 50;
 pub const HISTORY_RESULT_CHARS: usize = 2_000;
-pub const HISTORY_DIR: &str = "storage/dashboard/ai-runs";
+pub const HISTORY_DIR: &str = "ai-runs";
 /// Runs kept in memory (live ones, and the latest finished).
 const LIVE_RUNS: usize = 16;
 /// The browser's run-owner cookie.
@@ -891,7 +891,8 @@ fn timeout_status(limits: Limits) -> Status {
 // ---- history -----------------------------------------------------------------------------------
 
 fn history_dir() -> PathBuf {
-    super::testruns::root().join(HISTORY_DIR)
+    // In the dashboard's storage folder (`DASHBOARD_STORAGE_DIR`; a test process's own).
+    super::storage_dir().join(HISTORY_DIR)
 }
 
 /// A run id from a URL: 32 lowercase hex digits, nothing else (it names a file).
@@ -1060,9 +1061,7 @@ fn evidence_line(kind: &str, value: &str) -> Option<String> {
     match kind {
         "trace" => {
             let id: u64 = value.parse().ok()?;
-            let t = lock(&HUB.traces)
-                .find(id)
-                .or_else(|| lock(&HUB.http).example(id))?;
+            let t = super::trace::find(id)?;
             Some(format!(
                 "trace {id}: {} {} → {} in {}, {} SQL statements ({}){}",
                 t.method,

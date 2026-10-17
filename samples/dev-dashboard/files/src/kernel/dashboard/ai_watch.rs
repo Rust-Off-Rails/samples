@@ -466,10 +466,8 @@ pub fn digest(since: Option<i64>, now: i64) -> Digest {
         Some(_) => format!("Since you were last here ({})", ago(mins)),
         None => format!("The last {}", ago(mins)),
     };
-    let (samples, marks) = {
-        let s = lock(&HUB.series);
-        (s.between(from, now).0, s.annotations(from, now))
-    };
+    let slice = super::history::between(from, now);
+    let (samples, marks) = (slice.samples, slice.marks);
     let mut lines = Vec::new();
     // Per-second samples hold rates; per-minute ones (older than 15 minutes) too, per second.
     let step = |i: usize| {

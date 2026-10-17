@@ -11,6 +11,9 @@ crates = [
   "quick-xml",
   "reqwest --no-default-features --features rustls,json,http2",
   "tower --features util",
+  "flate2",
+  "pprof --no-default-features --target cfg(unix)",
+  "backtrace --target cfg(unix)",
 ]
 
 [[wire]]
@@ -67,7 +70,7 @@ dashboard,
 file = "src/config.rs"
 anchor = "config test"
 text = '''
-dashboard: DashboardConfig::default(),
+dashboard: DashboardConfig::for_tests(),
 '''
 
 [[wire]]
@@ -98,8 +101,38 @@ pub struct DashboardConfig {
     /// `DASHBOARD_DEMO_HISTORY=true` (development only): fill the last hour with synthetic,
     /// clearly marked history at boot (the demo and its screenshots).
     pub demo_history: bool,
+    /// `DASHBOARD_HISTORY=false`: keep the charts' history and the notable traces in memory only
+    /// (on by default: `storage/dashboard/history.sqlite3`, compressed, survives restarts).
+    pub history: bool,
+    /// `DASHBOARD_HISTORY_PATH`: where the history file lives (in `storage_dir` by default).
+    pub history_path: String,
+    /// `DASHBOARD_STORAGE_DIR`: the dashboard's own files (the history file, past Ask AI runs);
+    /// `storage/dashboard` by default. Tests get one per process (`for_tests`).
+    pub storage_dir: String,
+    /// `DASHBOARD_PROFILER=false`: no CPU sampling at all (development only, Linux and macOS:
+    /// the Hot functions page starts and stops it); `always`: sampling from boot.
+    pub profiler: bool,
+    pub profiler_at_boot: bool,
     /// The optional "Ask AI" assistant (`DASHBOARD_AI_*`).
     pub ai: DashboardAi,
+}
+
+/// The dashboard's folder for a config that didn't come from the environment (tests): one per
+/// process, so tests never share past runs or history with each other or with the app.
+// WHY the time too: a process id is reused, and a folder left by an earlier run would hand this
+// process another one's files.
+fn test_storage() -> std::path::PathBuf {
+    static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        std::env::temp_dir().join(format!(
+            "offrails-dashboard-{}-{nanos}",
+            std::process::id()
+        ))
+    })
+    .clone()
 }
 
 impl Default for DashboardConfig {
@@ -114,12 +147,22 @@ impl Default for DashboardConfig {
             test_database_url: None,
             cargo_target_dir: None,
             demo_history: false,
+            history: true,
+            history_path: test_storage().join("history.sqlite3").display().to_string(),
+            storage_dir: test_storage().display().to_string(),
+            profiler: true,
+            profiler_at_boot: false,
             ai: DashboardAi::default(),
         }
     }
 }
 
 impl DashboardConfig {
+    /// The defaults (tests): the dashboard's files in a folder of this process's own.
+    pub fn for_tests() -> Self {
+        Self::default()
+    }
+
     pub fn from_env(env: AppEnv) -> anyhow::Result<Self> {
         let get = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
         let mut invalid = Vec::new();
@@ -143,6 +186,23 @@ impl DashboardConfig {
         if !github_api.starts_with("https://") {
             invalid.push("GITHUB_API_URL (expected https://)");
         }
+        let history = match get("DASHBOARD_HISTORY").as_deref() {
+            None | Some("true") | Some("1") => true,
+            Some("false") | Some("0") => false,
+            Some(_) => {
+                invalid.push("DASHBOARD_HISTORY (expected true or false)");
+                true
+            }
+        };
+        let (profiler, profiler_at_boot) = match get("DASHBOARD_PROFILER").as_deref() {
+            None | Some("true") | Some("1") => (true, false),
+            Some("always") => (true, true),
+            Some("false") | Some("0") => (false, false),
+            Some(_) => {
+                invalid.push("DASHBOARD_PROFILER (expected true, always or false)");
+                (true, false)
+            }
+        };
         let ai = DashboardAi::from_env(&get, &mut invalid);
         if !invalid.is_empty() {
             anyhow::bail!("invalid env vars: {} (see .env.example)", invalid.join(", "));
@@ -158,6 +218,17 @@ impl DashboardConfig {
             cargo_target_dir: get("CARGO_TARGET_DIR"),
             demo_history: env == AppEnv::Development
                 && matches!(get("DASHBOARD_DEMO_HISTORY").as_deref(), Some("true" | "1")),
+            history,
+            history_path: get("DASHBOARD_HISTORY_PATH").unwrap_or_else(|| {
+                format!(
+                    "{}/history.sqlite3",
+                    get("DASHBOARD_STORAGE_DIR").unwrap_or_else(|| "storage/dashboard".to_owned())
+                )
+            }),
+            storage_dir: get("DASHBOARD_STORAGE_DIR")
+                .unwrap_or_else(|| "storage/dashboard".to_owned()),
+            profiler,
+            profiler_at_boot,
             ai,
         })
     }
@@ -505,6 +576,11 @@ impl fmt::Debug for DashboardConfig {
             .field("github_fixture", &self.github_fixture.is_some())
             .field("test_database_url", &set(&self.test_database_url))
             .field("demo_history", &self.demo_history)
+            .field("history", &self.history)
+            .field("history_path", &self.history_path)
+            .field("storage_dir", &self.storage_dir)
+            .field("profiler", &self.profiler)
+            .field("profiler_at_boot", &self.profiler_at_boot)
             .field("ai", &self.ai)
             .finish()
     }
@@ -582,8 +658,15 @@ text = '''
 ("GET",  "/dev/dashboard/charts",                 "web::charts_page",  Access::Dev),
 ("GET",  "/dev/dashboard/requests",               "web::requests_page", Access::Dev),
 ("GET",  "/dev/dashboard/routes",                 "web::routes_page",  Access::Dev),
-("GET",  "/dev/dashboard/traces",                 "web::traces_page",  Access::Dev),
-("GET",  "/dev/dashboard/traces/{id}",            "web::trace_page",   Access::Dev),
+("GET",  "/dev/dashboard/traces",                 "traces_web::explorer", Access::Dev),
+("GET",  "/dev/dashboard/traces/compare",         "traces_web::compare", Access::Dev),
+("GET",  "/dev/dashboard/traces/lookup",          "traces_web::lookup", Access::Dev),
+("GET",  "/dev/dashboard/traces/{id}",            "traces_web::trace_page", Access::Dev),
+("GET",  "/dev/dashboard/traces/{id}/waterfall",  "traces_web::waterfall_fragment", Access::Dev),
+("GET",  "/dev/dashboard/traces/{id}/json",       "traces_web::trace_json", Access::Dev),
+("GET",  "/dev/dashboard/methods",                "traces_web::methods_page", Access::Dev),
+("GET",  "/dev/dashboard/profile",                "traces_web::profile_page", Access::Dev),
+("POST", "/dev/dashboard/profile/toggle",         "traces_web::profile_toggle", Access::Dev),
 ("GET",  "/dev/dashboard/sql",                    "web::sql_page",     Access::Dev),
 ("GET",  "/dev/dashboard/sql/{id}",               "web::sql_show",     Access::Dev),
 ("POST", "/dev/dashboard/sql/{id}/explain",       "web::explain",      Access::Dev),
@@ -625,8 +708,13 @@ text = '''
 ("GET",  "/admin/dashboard",                      "web::overview",     Access::Admin),
 ("GET",  "/admin/dashboard/charts",               "web::charts_page",  Access::Admin),
 ("GET",  "/admin/dashboard/requests",             "web::requests_page", Access::Admin),
-("GET",  "/admin/dashboard/traces",               "web::traces_page",  Access::Admin),
-("GET",  "/admin/dashboard/traces/{id}",          "web::trace_page",   Access::Admin),
+("GET",  "/admin/dashboard/traces",               "traces_web::explorer", Access::Admin),
+("GET",  "/admin/dashboard/traces/compare",       "traces_web::compare", Access::Admin),
+("GET",  "/admin/dashboard/traces/lookup",        "traces_web::lookup", Access::Admin),
+("GET",  "/admin/dashboard/traces/{id}",          "traces_web::trace_page", Access::Admin),
+("GET",  "/admin/dashboard/traces/{id}/waterfall", "traces_web::waterfall_fragment", Access::Admin),
+("GET",  "/admin/dashboard/traces/{id}/json",     "traces_web::trace_json", Access::Admin),
+("GET",  "/admin/dashboard/methods",              "traces_web::methods_page", Access::Admin),
 ("GET",  "/admin/dashboard/sql",                  "web::sql_page",     Access::Admin),
 ("GET",  "/admin/dashboard/sql/{id}",             "web::sql_show",     Access::Admin),
 ("GET",  "/admin/dashboard/config",               "web::config_page",  Access::Admin),
@@ -710,6 +798,13 @@ kernel::dashboard::serve_started(&state);
 
 [[wire]]
 file = "src/main.rs"
+anchor = "serve stop"
+text = '''
+kernel::dashboard::serve_stopped();
+'''
+
+[[wire]]
+file = "src/main.rs"
 anchor = "cli commands"
 text = '''
 /// The load lab's traffic generator against a running server.
@@ -748,6 +843,8 @@ anchor = "kernel head"
 text = '''
 {# The dev dashboard's Ask AI bar (development only; ai_web::bar decides which pages). #}
 {% if let Some(bar) = crate::kernel::dashboard::ai_web::bar(chrome.theme.return_to.as_str()) %}<link rel="stylesheet" href="{{ bar.css }}"><script src="{{ bar.js }}" defer></script>{% endif %}
+{# The trace component, on pages that embed one (a job, a mail; development only). #}
+{% if let Some((css, js)) = crate::kernel::dashboard::waterfall::embed_assets(chrome.theme.return_to.as_str()) %}<link rel="stylesheet" href="{{ css }}"><script src="{{ js }}" defer></script>{% endif %}
 '''
 
 [[wire]]
@@ -773,6 +870,10 @@ DASHBOARD_IN_PRODUCTION=false
 # CARGO_TARGET_DIR=target
 # DASHBOARD_GITHUB_FIXTURE=tests/fixtures/github   # development only: recorded GitHub answers (the demo)
 # DASHBOARD_DEMO_HISTORY=false             # development only: an hour of synthetic, marked history (the demo)
+# DASHBOARD_HISTORY=true                   # charts' history and notable traces on disk (false: memory only)
+# DASHBOARD_STORAGE_DIR=storage/dashboard  # the dashboard's own files (history, past Ask AI runs)
+# DASHBOARD_HISTORY_PATH=storage/dashboard/history.sqlite3
+# DASHBOARD_PROFILER=true                  # development, Linux/macOS: Hot functions starts CPU sampling (always: from boot; false: never)
 # "Ask AI" on the dashboard (optional, your own key; development only unless DASHBOARD_AI_IN_PRODUCTION).
 # DASHBOARD_AI_PROVIDER=anthropic          # or openai-compatible (OpenAI, Ollama, LM Studio, a gateway)
 # DASHBOARD_AI_API_KEY=                    # never shown, logged or stored; optional for a local model
@@ -833,6 +934,8 @@ text = '''
 "/dev/dashboard/requests",
 "/dev/dashboard/routes",
 "/dev/dashboard/traces",
+"/dev/dashboard/methods",
+"/dev/dashboard/profile",
 "/dev/dashboard/sql",
 "/dev/dashboard/logs",
 "/dev/dashboard/schema",
@@ -889,4 +992,27 @@ anchor = "dashboard ai sources"
 when = "realtime"
 text = '''
 Box::new(crate::kernel::dashboard::ai_realtime::Realtime),
+'''
+
+[[wire]]
+file = "templates/kernel/jobs/show.html"
+anchor = "job panels"
+when = "jobs-dashboard"
+text = '''
+{# The dev dashboard: this job's last run as a waterfall (development only). #}
+{% if crate::kernel::dashboard::waterfall::embeds_on() %}
+<section class="panel" aria-labelledby="h-trace"><header><h2 id="h-trace">Trace</h2><span class="muted small">its last run: perform → methods → SQL → calls out</span></header>
+<details data-inline-wf><summary>Show the waterfall</summary><div data-trace-embed="/dev/dashboard/traces/lookup?job={{ job.id }}"><a href="/dev/dashboard/traces?kind=job">Job traces</a></div></details></section>
+{% endif %}
+'''
+
+[[wire]]
+file = "templates/kernel/mailbox/_message.html"
+anchor = "message panels"
+when = "dev-mailbox"
+text = '''
+{# The dev dashboard: the request or job that sent this mail, as a waterfall. #}
+{% if let Some(id) = m.id %}{% if crate::kernel::dashboard::waterfall::embeds_on() %}
+<details data-inline-wf><summary>What sent it: the trace</summary><div data-trace-embed="/dev/dashboard/traces/lookup?mail={{ id }}"><a href="/dev/dashboard/traces">Traces</a></div></details>
+{% endif %}{% endif %}
 '''

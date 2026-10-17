@@ -1497,7 +1497,7 @@ fn inlines(s: &str, cx: &Cx, charts: &mut Vec<ChartAt>) -> Vec<Inline> {
                 let after = &rest[b + 2..];
                 match after.find("**") {
                     Some(end) => {
-                        out.push(Inline::Strong(after[..end].to_owned()));
+                        strong(&after[..end], &mut out);
                         rest = &after[end + 2..];
                     }
                     None => {
@@ -1513,6 +1513,35 @@ fn inlines(s: &str, cx: &Cx, charts: &mut Vec<ChartAt>) -> Vec<Inline> {
         }
     }
     out
+}
+
+/// **bold** text, with any `code` inside it as code (never raw backticks): the bold runs around
+/// the code stay bold.
+fn strong(inner: &str, out: &mut Vec<Inline>) {
+    if !inner.contains('`') {
+        out.push(Inline::Strong(inner.to_owned()));
+        return;
+    }
+    for (i, part) in inner.split('`').enumerate() {
+        if part.is_empty() {
+            continue;
+        }
+        if i % 2 == 1 {
+            out.push(code_or_guide(part));
+        } else {
+            out.push(Inline::Strong(part.to_owned()));
+        }
+    }
+}
+
+/// A bracket that names a citation kind but isn't a valid citation (a model's
+/// `[finding:no id in view]`): its words, without the tag syntax.
+fn broken_citation(inner: &str) -> Option<String> {
+    let (kind, value) = inner.split_once(':')?;
+    if !CITE_KINDS.contains(&kind.trim().to_ascii_lowercase().as_str()) {
+        return None;
+    }
+    Some(value.trim().to_owned())
 }
 
 /// Plain text: citation tags become `Cite`s, the rest goes on to `guides`.
@@ -1539,7 +1568,15 @@ fn text(s: &str, cx: &Cx, charts: &mut Vec<ChartAt>, out: &mut Vec<Inline>) {
                     charts.extend(chart);
                 }
             }
-            None => guides(&rest[..open + 1 + close + 1], out),
+            None => match broken_citation(inner) {
+                Some(words) => {
+                    guides(&rest[..open], out);
+                    if !words.is_empty() {
+                        push_text(out, &words);
+                    }
+                }
+                None => guides(&rest[..open + 1 + close + 1], out),
+            },
         }
         rest = &tail[close + 1..];
     }
@@ -1583,6 +1620,11 @@ fn push_text(out: &mut Vec<Inline>, s: &str) {
     }
 }
 
+/// The kinds a citation tag may name.
+const CITE_KINDS: &[&str] = &[
+    "trace", "sql", "route", "chart", "table", "finding", "file", "job", "mail",
+];
+
 /// A citation tag (`kind:value`, without the brackets) as an inline, and the chart it asks for.
 /// `None`: not a citation (or a malformed one), shown as the text it was.
 fn cite(inner: &str, cx: &Cx) -> Option<(Inline, Option<ChartAt>)> {
@@ -1591,9 +1633,7 @@ fn cite(inner: &str, cx: &Cx) -> Option<(Inline, Option<ChartAt>)> {
     }
     // Tolerant of how models write them: `kind:value`, `Kind: value`, `kind value`, `#580`, a
     // trailing comma, backticks.
-    const KINDS: &[&str] = &[
-        "trace", "sql", "route", "chart", "table", "finding", "file", "job", "mail",
-    ];
+    const KINDS: &[&str] = CITE_KINDS;
     let inner = inner.trim().trim_matches('`').trim();
     let (kind, value) = match inner.split_once(':') {
         Some((k, v)) if KINDS.contains(&k.trim().to_ascii_lowercase().as_str()) => (k, v),
@@ -1796,6 +1836,26 @@ mod tests {
         assert_eq!(
             inlines("`.offrails/guides/evil.md`", &cx, &mut Vec::new()),
             vec![Inline::Code(".offrails/guides/evil.md".into())]
+        );
+        // Code inside bold is code: no raw backticks.
+        assert_eq!(
+            inlines("**N+1 on `/dev/lab/orders`**", &cx, &mut Vec::new()),
+            vec![
+                Inline::Strong("N+1 on ".into()),
+                Inline::Code("/dev/lab/orders".into())
+            ]
+        );
+        // A citation the model invented without an id reads as words, never as tag syntax.
+        let made_up = inlines(
+            "See [finding:no id in view — see test results] here.",
+            &cx,
+            &mut Vec::new(),
+        );
+        assert_eq!(
+            made_up,
+            vec![Inline::Text(
+                "See no id in view — see test results here.".into()
+            )]
         );
     }
 

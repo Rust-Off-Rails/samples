@@ -293,24 +293,9 @@ async fn orders_n_plus_one_body(
     theme: ThemeSwitch,
     flash: Option<Extension<RequestFlash>>,
 ) -> Result<Response, AppError> {
-    let (orders, counts) = async {
-        let orders = order::Entity::find()
-            .order_by_desc(order::Column::Id)
-            .limit(20)
-            .all(&state.db)
-            .await?;
-        let mut counts = Vec::with_capacity(orders.len());
-        for o in &orders {
-            let items = order_item::Entity::find()
-                .filter(order_item::Column::OrderId.eq(o.id))
-                .all(&state.db)
-                .await?;
-            counts.push((o.id, items.len()));
-        }
-        Ok::<_, DbErr>((orders, counts))
-    }
-    .instrument(tracing::info_span!("load_orders", n_plus_one = true))
-    .await?;
+    let (orders, counts) = load_orders_one_by_one(&state.db)
+        .instrument(tracing::info_span!("load_orders", n_plus_one = true))
+        .await?;
     Ok(render_orders(
         &state,
         "Lab: orders (N+1)",
@@ -320,6 +305,45 @@ async fn orders_n_plus_one_body(
         flash,
         theme,
     ))
+}
+
+/// Orders, and each order's item count.
+type OrdersAndCounts = (Vec<order::Model>, Vec<(i64, usize)>);
+
+/// The orders, then each order's items in a query of its own (the N+1). Instrumented the way the
+/// README shows ("Instrumenting your own methods"): the waterfall reads
+/// `load_orders_one_by_one → recent_orders → sql`, then `load_items ×20 → sql`, folded into one row.
+// GUIDE: .offrails/guides/errors-and-logging.md#logging
+#[tracing::instrument(level = "debug", skip_all)]
+async fn load_orders_one_by_one(db: &DatabaseConnection) -> Result<OrdersAndCounts, DbErr> {
+    let orders = recent_orders(db).await?;
+    let mut counts = Vec::with_capacity(orders.len());
+    for o in &orders {
+        counts.push((o.id, load_items(db, o.id).await?.len()));
+    }
+    Ok((orders, counts))
+}
+
+#[tracing::instrument(level = "debug", skip_all)]
+async fn recent_orders(db: &DatabaseConnection) -> Result<Vec<order::Model>, DbErr> {
+    order::Entity::find()
+        .order_by_desc(order::Column::Id)
+        .limit(20)
+        .all(db)
+        .await
+}
+
+// The order id is a field (it shows in the side panel); never a secret or personal data there.
+#[tracing::instrument(level = "debug", skip_all, fields(order_id))]
+async fn load_items(
+    db: &DatabaseConnection,
+    order_id: i64,
+) -> Result<Vec<order_item::Model>, DbErr> {
+    tracing::Span::current().record("order_id", order_id);
+    order_item::Entity::find()
+        .filter(order_item::Column::OrderId.eq(order_id))
+        .all(db)
+        .await
 }
 
 /// `GET /dev/lab/slow-query`: a recursive CTE that counts to `SLOW_QUERY_ROWS`, on either backend.
@@ -656,7 +680,7 @@ pub fn start(state: &AppState, label: &str, plan: Plan) -> Result<Arc<Run>, Stri
     };
     let r = Arc::new(Run::new(label, plan, &target));
     *slot = Some(r.clone());
-    lock(&HUB.series).annotate(super::series::Annotation {
+    let mark = super::series::Annotation {
         t: Utc::now().timestamp(),
         kind: "lab",
         label: format!(
@@ -664,7 +688,9 @@ pub fn start(state: &AppState, label: &str, plan: Plan) -> Result<Arc<Run>, Stri
             r.plan.rps, r.plan.secs
         ),
         demo: false,
-    });
+    };
+    super::history::record_mark(&mark);
+    lock(&HUB.series).annotate(mark);
     tokio::spawn(run(target, r.clone()));
     Ok(r)
 }

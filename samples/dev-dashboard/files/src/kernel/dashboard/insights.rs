@@ -24,6 +24,15 @@ pub const LARGE_TABLE_ROWS: i64 = 100_000;
 pub const SCAN_MIN_ROWS: i64 = 500;
 /// RSS growth over the window that suggests a leak.
 pub const LEAK_BYTES: f64 = 64.0 * 1024.0 * 1024.0;
+/// A method (span) whose p95 is past this is slow. APP.
+pub const SLOW_METHOD_US: u64 = 100_000;
+/// A method run more than this many times in one trace is a loop worth batching. APP.
+pub const CALLS_PER_TRACE: u32 = 25;
+/// A method whose p95 at least doubled between the older and newer half of the traces, and is
+/// past this, is getting slower. APP.
+pub const GROWTH_MIN_US: u64 = 20_000;
+/// A function of the app's own with at least this share of CPU samples (self) is hot. APP.
+pub const HOT_CPU_SHARE: f64 = 0.20;
 /// EXPLAINs per refresh, at most (each is cached for a minute).
 const EXPLAIN_BUDGET: usize = 20;
 /// CSP reports kept.
@@ -226,6 +235,11 @@ pub async fn findings(state: &AppState) -> Vec<Finding> {
     slow_routes_and_queries(&mut out);
     rising_errors(&mut out);
     slow_renders(&mut out);
+    {
+        let traces = lock(&HUB.traces).list(false);
+        let (hot, samples) = super::profiler::hot(5, "app");
+        out.extend(slow_functions(&traces, &hot, samples));
+    }
     memory_and_pool(&mut out);
     csp(&mut out);
     let db = &state.db;
@@ -377,6 +391,114 @@ fn slow_renders(out: &mut Vec<Finding>) {
             });
         }
     }
+}
+
+/// Slow functions, deterministically, from the spans (wall clock) and the CPU samples: a method
+/// whose p95 is past `SLOW_METHOD_US`, one run more than `CALLS_PER_TRACE` times in a trace, one
+/// whose p95 doubled between the older and newer half of the traces, and an app function hot on
+/// the CPU (`HOT_CPU_SHARE`).
+pub fn slow_functions(
+    traces: &[std::sync::Arc<super::trace::Trace>],
+    hot: &[super::profiler::Hot],
+    samples: u64,
+) -> Vec<Finding> {
+    let mut out = Vec::new();
+    let (stats, _) = super::methods::aggregate(traces);
+    let methods_href = |name: &str| {
+        format!(
+            "/dev/dashboard/traces?fn={}",
+            crate::kernel::cookie::encode(name)
+        )
+    };
+    for m in &stats {
+        // Handlers and renders have their own rules (slow routes, slow renders).
+        if matches!(m.kind, "handler" | "template" | "middleware" | "job") {
+            continue;
+        }
+        if m.calls >= 3 && m.p95() >= SLOW_METHOD_US {
+            out.push(Finding {
+                key: format!("slow-fn-{}", m.key),
+                kind: "slow_function",
+                severity: if m.p95() >= 5 * SLOW_METHOD_US { Severity::High } else { Severity::Medium },
+                score: m.p95() / 1000 * m.calls.min(100),
+                title: format!("Slow function {}", m.name),
+                evidence: format!("p95 {} over {} calls (self {} of {} total), in {}", micros(m.p95()), m.calls, micros(m.self_us), micros(m.total_us), m.routes.keys().take(3).copied().collect::<Vec<_>>().join(", ")),
+                fix: format!("Open a trace that ran it: if its time is SQL, fix the query; if it is self time, look at Hot functions for where the CPU went; if it waits, add a span inside to see on what. Ask AI \"Why is {} slow?\" from its trace.", m.name),
+                guide: ".offrails/guides/dev-tools.md",
+                guide_url: "https://rustoffrails.org/docs/dev-tools",
+                href: methods_href(m.name),
+            });
+        }
+        if m.max_per_trace > CALLS_PER_TRACE {
+            out.push(Finding {
+                key: format!("loop-fn-{}", m.key),
+                kind: "slow_function",
+                severity: Severity::Medium,
+                score: u64::from(m.max_per_trace),
+                title: format!("{} runs {}× in one request", m.name, m.max_per_trace),
+                evidence: format!("{} calls in {} traces ({:.0} per trace), {} in total", m.calls, m.traces, m.per_trace(), micros(m.total_us)),
+                fix: "A loop calls it once per item: give it every item at once (one query with `is_in(ids)`, one batch call), then loop over the result.".into(),
+                guide: ".offrails/guides/models.md#associations",
+                guide_url: "https://rustoffrails.org/docs/models#associations",
+                href: methods_href(m.name),
+            });
+        }
+    }
+    // Growth: the older half of the traces against the newer half.
+    if traces.len() >= 20 {
+        let mut by_age: Vec<&std::sync::Arc<super::trace::Trace>> = traces.iter().collect();
+        by_age.sort_by_key(|t| t.id);
+        let (old, new) = by_age.split_at(by_age.len() / 2);
+        let own = |v: &[&std::sync::Arc<super::trace::Trace>]| {
+            super::methods::aggregate(&v.iter().map(|t| (*t).clone()).collect::<Vec<_>>()).0
+        };
+        let before: HashMap<String, (u64, u64)> = own(old)
+            .into_iter()
+            .map(|m| (m.key.clone(), (m.calls, m.p95())))
+            .collect();
+        for m in own(new) {
+            if let Some((calls, p95)) = before.get(&m.key)
+                && *calls >= 5
+                && m.calls >= 5
+                && m.p95() >= GROWTH_MIN_US
+                && m.p95() >= 2 * p95.max(&1)
+                && !matches!(m.kind, "middleware")
+            {
+                out.push(Finding {
+                    key: format!("grow-fn-{}", m.key),
+                    kind: "slow_function",
+                    severity: Severity::Medium,
+                    score: m.p95() / 1000,
+                    title: format!("{} is getting slower", m.name),
+                    evidence: format!("p95 {} in the newer traces, {} before", micros(m.p95()), micros(*p95)),
+                    fix: "Compare a recent trace with an older one of the same route (tick both in Traces, then Compare): the diff shows what it does now that it didn't.".into(),
+                    guide: ".offrails/guides/dev-tools.md",
+                    guide_url: "https://rustoffrails.org/docs/dev-tools",
+                    href: methods_href(m.name),
+                });
+            }
+        }
+    }
+    if samples >= 50 {
+        for h in hot.iter().filter(|h| h.origin == "app").take(3) {
+            let share = h.self_n as f64 / samples as f64;
+            if share >= HOT_CPU_SHARE {
+                out.push(Finding {
+                    key: format!("hot-cpu-{}", h.name),
+                    kind: "slow_function",
+                    severity: if share >= 0.5 { Severity::High } else { Severity::Medium },
+                    score: (share * 1000.0) as u64,
+                    title: format!("{} is hot on the CPU", super::profiler::short(&h.name)),
+                    evidence: format!("{:.0}% of the CPU samples in the last 5 minutes were in it (via {})", share * 100.0, if h.path.is_empty() { "the root" } else { &h.path }),
+                    fix: "Do less per call (cache a computed value, avoid cloning large values, move work out of a loop), or move it off the request (a job).".into(),
+                    guide: ".offrails/guides/dev-tools.md",
+                    guide_url: "https://rustoffrails.org/docs/dev-tools",
+                    href: format!("/dev/dashboard/profile?filter=app&fn={}", crate::kernel::cookie::encode(&h.name)),
+                });
+            }
+        }
+    }
+    out
 }
 
 /// Least-squares slope of (t, v), per second.

@@ -128,7 +128,7 @@ APP_ENV=development
 PORT=$port
 DATABASE_URL=sqlite://storage/demo.sqlite3?mode=rwc
 MAIL_FROM="Acme <hello@example.com>"
-RUST_LOG=info
+RUST_LOG=info,offrails_host=debug
 EOF
   "$demo/app-bin" db migrate >/dev/null
   if grep -q "installed sample dev-mailbox " docs/decisions.md; then

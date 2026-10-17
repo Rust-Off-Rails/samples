@@ -5,14 +5,17 @@
 //! GUIDE: .offrails/guides/dev-tools.md
 //! GUIDE: .offrails/guides/errors-and-logging.md#logging
 //!
-//! Everything lives in this process, in fixed-size memory: no Prometheus, no Grafana, no Jaeger.
+//! Everything lives in this process, in fixed-size memory, plus one compressed SQLite file of
+//! history that survives restarts (`history.rs`): no Prometheus, no Grafana, no Jaeger.
 //!
 //! | Part | Where it hooks in | File |
 //! |------|-------------------|------|
 //! | Collector: memory, CPU, file descriptors, Tokio, DB pool, every second | a task started by `serve` | `collector.rs` |
 //! | Requests: count, status classes, latency histogram, bytes, slowest examples per route | a middleware outside the router | `http.rs` |
 //! | SQL: fingerprints, durations, redacted params, N+1, EXPLAIN | SeaORM's metric callback | `sql.rs` |
-//! | Traces and live logs | a `tracing-subscriber` layer | `trace.rs` |
+//! | Traces and live logs: requests, jobs, mail; method spans | a `tracing-subscriber` layer | `trace.rs` |
+//! | Waterfalls, the traces explorer, methods, hot functions (CPU sampling) | the traces, `pprof` | `waterfall.rs`, `traces_web.rs`, `methods.rs`, `profiler.rs` |
+//! | History on disk: minutes, hours, markers, notable traces | its own SQLite file | `history.rs` |
 //! | Load lab: fake data, traffic, scenarios | `/dev/dashboard/lab`, `/dev/lab/*`, `app bench` | `lab.rs` |
 //! | Insights, routes explorer, schema | everything above, the catalog, CSP reports | `insights.rs`, `route_explorer.rs`, `schema.rs` |
 //! | Schema diagram (ERD), migrations timeline and drift | the catalog, `seaql_migrations`, `migration/src/*.rs` | `erd.rs`, `migrations.rs` |
@@ -39,17 +42,22 @@ pub mod demo;
 pub mod erd;
 pub mod github;
 pub mod hist;
+pub mod history;
 pub mod http;
 pub mod insights;
 pub mod lab;
+pub mod methods;
 pub mod migrations;
 pub mod panels;
+pub mod profiler;
 pub mod route_explorer;
 pub mod schema;
 pub mod series;
 pub mod sql;
 pub mod testruns;
 pub mod trace;
+pub mod traces_web;
+pub mod waterfall;
 pub mod web;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -88,6 +96,8 @@ pub struct Hub {
     pub serving: OnceLock<String>,
     /// Resident memory at the collector's first sample ("since boot" on the memory card).
     pub boot_rss: AtomicU64,
+    /// The dashboard's own files (`DASHBOARD_STORAGE_DIR`), set by `instrument`.
+    pub storage: Mutex<Option<std::path::PathBuf>>,
 }
 
 /// Per-second accumulators.
@@ -120,6 +130,7 @@ impl Default for Hub {
             insights: insights::InsightState::default(),
             serving: OnceLock::new(),
             boot_rss: AtomicU64::new(0),
+            storage: Mutex::new(None),
         }
     }
 }
@@ -153,6 +164,11 @@ impl Hub {
         self.next_id.fetch_add(1, Ordering::Relaxed)
     }
 
+    /// Ids from here on are above `n` (the history file's last trace id).
+    pub fn ids_after(&self, n: u64) {
+        self.next_id.fetch_max(n + 1, Ordering::Relaxed);
+    }
+
     /// Forgets requests, SQL, traces, N+1 and logs (the charts keep their history).
     pub fn reset(&self) {
         *lock(&self.http) = http::HttpStats::default();
@@ -173,6 +189,7 @@ impl Hub {
             + lock(&self.sql).approx_bytes()
             + lock(&self.traces).approx_bytes()
             + lock(&self.logs).approx_bytes()
+            + lock(&profiler::STATE).approx_bytes()
     }
 }
 
@@ -180,6 +197,13 @@ impl Hub {
 /// mounted (`DASHBOARD_IN_PRODUCTION=true` and an admin gate). Tests (`APP_ENV=test`) don't.
 pub fn enabled_for(config: &Config) -> bool {
     config.is_development() || access::mounted_in_production(config)
+}
+
+/// The dashboard's own folder: `DASHBOARD_STORAGE_DIR`, `storage/dashboard` by default.
+pub fn storage_dir() -> std::path::PathBuf {
+    lock(&HUB.storage)
+        .clone()
+        .unwrap_or_else(|| std::path::PathBuf::from("storage/dashboard"))
 }
 
 /// Called from `AppState::new`: turns recording on and installs the SQL callback.
@@ -192,6 +216,7 @@ pub fn instrument(db: DatabaseConnection, config: &Config) -> DatabaseConnection
         return db;
     }
     HUB.enable(config.is_development());
+    *lock(&HUB.storage) = Some(std::path::PathBuf::from(&config.dashboard.storage_dir));
     // The Ask AI bar on other kernel pages (the kernel layout's wire asks `ai_web::bar`).
     ai_web::BAR.store(
         ai::allowed(config, false),
@@ -215,22 +240,54 @@ pub fn serve_started(state: &crate::state::AppState) {
         (None, false) => format!("http://127.0.0.1:{}", c.port),
     };
     let _ = HUB.serving.set(addr);
+    // The history file: development, and production when the read-only view is mounted (then
+    // without log events or span fields). DASHBOARD_HISTORY=false keeps everything in memory.
+    if c.dashboard.history {
+        let path = std::path::Path::new(&c.dashboard.history_path);
+        if let Err(e) = history::open(path, true, !c.is_development()) {
+            tracing::warn!(error = %e, file = %path.display(), "the dashboard's history is off (it keeps memory only)");
+        }
+    }
     {
         let now = chrono::Utc::now().timestamp();
-        let mut series = lock(&HUB.series);
-        if c.dashboard.demo_history {
-            demo::backfill(&mut series, now);
-        }
-        series.annotate(series::Annotation {
+        let boot = series::Annotation {
             t: now,
             kind: "boot",
             label: "server started".into(),
             demo: false,
-        });
+        };
+        let mut series = lock(&HUB.series);
+        if c.dashboard.demo_history {
+            for (m, mark) in demo::backfill(&mut series, now) {
+                if let Some(m) = m {
+                    history::record_minute(m, true);
+                }
+                if let Some(a) = mark {
+                    history::record_mark(&a);
+                }
+            }
+        }
+        history::record_mark(&boot);
+        series.annotate(boot);
     }
     collector::spawn(state.clone());
+    // Hot functions: CPU sampling, development only, Linux and macOS (DASHBOARD_PROFILER=false
+    // turns it off).
+    profiler::start(&state.config);
     // DASHBOARD_AI_PROACTIVE=true (development): the watcher and its incident cards.
     ai_watch::spawn(state.clone());
+}
+
+/// Called by `serve` once it stops listening: the minute in progress and the pending traces go to
+/// disk, so a clean restart loses nothing.
+pub fn serve_stopped() {
+    if !history::is_open() {
+        return;
+    }
+    if let Some(m) = lock(&HUB.series).partial_minute() {
+        history::record_minute(m, false);
+    }
+    history::close();
 }
 
 /// The numbers an agent asks for first (`/dev/dashboard.json`, `app introspect`).

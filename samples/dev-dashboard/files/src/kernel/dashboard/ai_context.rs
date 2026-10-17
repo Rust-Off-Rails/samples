@@ -280,11 +280,7 @@ pub(super) fn trace(id: &str, ro: bool) -> Result<String, String> {
     let t = id
         .parse::<u64>()
         .ok()
-        .and_then(|id| {
-            lock(&HUB.traces)
-                .find(id)
-                .or_else(|| lock(&HUB.http).example(id))
-        })
+        .and_then(super::trace::find)
         .ok_or("That trace is no longer kept.")?;
     let mut s = format!(
         "## Trace {}\n{} {} (path {}) → {} in {}; {} SQL statements taking {}\n\n### Spans (start, duration)\n",

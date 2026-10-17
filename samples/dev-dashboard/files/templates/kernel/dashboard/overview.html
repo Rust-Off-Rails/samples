@@ -58,7 +58,14 @@
   <section class="panel" aria-labelledby="ov-n1">
     <header><h2 id="ov-n1">N+1 queries</h2><a href="{{ d.base }}/sql#n-plus-one">SQL</a></header>
     {% if n_plus_one.is_empty() %}<p class="empty">None seen. A request that runs the same statement more than 5 times shows up here.</p>{% else %}
-    <ul class="sql-list" role="list">{% for n in n_plus_one %}<li><a href="{{ d.base }}/traces/{{ n.trace }}"><span class="mono">{{ n.route }}</span></a> <span class="badge tone-warn">{{ n.count }}× in one request</span><code>{{ n.sql }}</code></li>{% endfor %}</ul>{% endif %}
+    <ul class="sql-list" role="list">{% for n in n_plus_one %}<li><a href="{{ d.base }}/traces/{{ n.trace }}"><span class="mono">{{ n.route }}</span></a> <span class="badge tone-warn">{{ n.count }}× in one request</span><code>{{ n.sql }}</code><details data-inline-wf><summary>Its waterfall</summary><div data-wf-src="{{ d.base }}/traces/{{ n.trace }}/waterfall"><a href="{{ d.base }}/traces/{{ n.trace }}">Open the trace</a></div></details></li>{% endfor %}</ul>{% endif %}
+  </section>
+  <section class="panel" aria-labelledby="ov-fns">
+    <header><h2 id="ov-fns">Slowest functions</h2><a href="{{ d.base }}/methods?sort=p95">Methods</a>{% if !d.ro %} · <a href="{{ d.base }}/profile">Hot functions</a>{% endif %}</header>
+    {% if slow_fns.is_empty() %}<p class="empty">No method spans yet: add <code>#[tracing::instrument(skip_all)]</code> to a function (README "Instrumenting your own methods").</p>{% else %}
+    <div class="scroll" tabindex="0" role="region" aria-label="Table"><table class="data-table"><thead><tr><th scope="col">Function</th><th scope="col" class="num">p95</th><th scope="col" class="num">Calls</th></tr></thead><tbody>
+      {% for f in slow_fns %}<tr><th scope="row"><a class="mono" href="{{ f.href }}">{{ f.name }}</a><span class="sub mono">{{ f.module }}</span></th><td class="num">{{ f.p95 }}</td><td class="num">{{ f.calls }}</td></tr>{% endfor %}
+    </tbody></table></div>{% endif %}
   </section>
 </div>
 {% endblock %}

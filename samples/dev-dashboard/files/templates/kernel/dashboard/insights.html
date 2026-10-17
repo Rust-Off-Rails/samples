@@ -22,6 +22,7 @@
     <div class="finding-actions">
       <a class="btn" href="{{ f.href }}">See the evidence</a>
       {% if d.ai_on %}<a class="btn quiet" href="{{ d.ask_href("insights", &f.id) }}">Ask AI about this</a>{% endif %}
+      {% if !f.trace.is_empty() %}<details data-inline-wf><summary>Its waterfall</summary><div data-wf-src="/dev/dashboard/traces/{{ f.trace }}/waterfall"><a href="{{ f.href }}">Open the trace</a></div></details>{% endif %}
       <form method="post" action="/dev/dashboard/insights/dismiss"><input type="hidden" name="id" value="{{ f.id }}"><button class="btn quiet">Dismiss for this session</button></form>
     </div>
   </li>

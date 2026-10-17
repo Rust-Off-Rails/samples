@@ -29,6 +29,9 @@
     const apply = (key, html) => {
       const el = document.querySelector(`[data-live="${key}"]`);
       if (!el) return;
+      // The traces explorer holds its list while a row is open or being scrolled
+      // (dashboard-trace.js sets data-live-hold); the next update after that applies.
+      if (el.hasAttribute("data-live-hold")) return;
       // Keep open <details> (a chart's data table) open across updates.
       const open = [...el.querySelectorAll("details[open]")].map((d) => d.closest("[id]")?.id);
       el.innerHTML = html;

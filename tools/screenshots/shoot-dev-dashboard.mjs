@@ -72,6 +72,9 @@ const ensureTraffic = async () => {
   await new Promise((r) => setTimeout(r, 4000));
 };
 
+// Hot functions sample on demand: start it now, so the profile screens have 15 minutes to fill.
+await fetch(`${BASE}/dev/dashboard/profile/toggle`, { method: "POST", body: new URLSearchParams({ paused: "0" }), redirect: "manual" });
+
 const screens = [
   // The overview opens with the AI command center (expanded): without a key here, with the mock
   // in "overview-ai" (the AI server's proactive mode writes the briefing on its first visit).
@@ -90,8 +93,54 @@ const screens = [
   ["insights", async () => "/dev/dashboard/insights"],
   ["requests", async () => "/dev/dashboard/requests?sort=p95"],
   ["routes", async () => "/dev/dashboard/routes?area=dev&q=lab"],
-  ["traces", async () => "/dev/dashboard/traces?notable=1"],
-  ["waterfall", async (p) => firstHref(p, "/dev/dashboard/traces?route=%2Fdev%2Flab%2Forders%2Fn-plus-one", "table a.mono")],
+  // The traces explorer: collapsed; a row open inline with the N+1's folded row unfolded; two
+  // traces compared; the trace page (the permalink) with a statement in the side panel.
+  ["traces", async () => "/dev/dashboard/traces"],
+  ["traces-expanded", async () => "/dev/dashboard/traces?route=%2Fdev%2Flab%2Forders%2Fn-plus-one", async (page) => {
+    await page.locator(".tx-d > summary").first().click();
+    const wf = page.locator(".tx-d[open] [data-waterfall]").first();
+    await wf.waitFor({ timeout: 15_000 });
+    await wf.locator("tr.grp.flagged .wf-caret").first().evaluate((el) => el.click());
+    await page.locator(".tx-d[open]").first().scrollIntoViewIfNeeded();
+  }],
+  ["traces-compare", async (p) => {
+    await p.goto(`${BASE}/dev/dashboard/traces?route=%2Fdev%2Flab%2Forders%2Fn-plus-one`, { waitUntil: "load" });
+    const a = await p.locator(".tx-pick").nth(0).getAttribute("value");
+    await p.goto(`${BASE}/dev/dashboard/traces?route=%2Fdev%2Flab%2Forders`, { waitUntil: "load" });
+    const b = await p.locator(".tx-pick").nth(0).getAttribute("value");
+    return `/dev/dashboard/traces/compare?cmp=${b}&cmp=${a}`;
+  }],
+  ["waterfall", async (p) => firstHref(p, "/dev/dashboard/traces?route=%2Fdev%2Flab%2Forders%2Fn-plus-one", ".tx-body a")],
+  ["waterfall-panel", async (p) => firstHref(p, "/dev/dashboard/traces?route=%2Fdev%2Flab%2Forders%2Fn-plus-one", ".tx-body a"), async (page) => {
+    await page.locator("[data-wf-reveal]").first().evaluate((el) => el.click());
+    // A script click: on a phone the label sits in a narrow, sideways-scrolling column.
+    await page.locator("tr.k-sql.flagged:not([hidden]) .wf-label").first().evaluate((el) => el.click());
+    await page.locator("[data-wf-panel]:not([hidden])").waitFor();
+  }],
+  ["methods", async () => "/dev/dashboard/methods?sort=p95"],
+  ["icicle", async () => "/dev/dashboard/methods?route=%2Fdev%2Flab%2Forders%2Fn-plus-one", async (page) => {
+    await page.locator(".icicle").scrollIntoViewIfNeeded();
+  }],
+  ["hot-functions", async () => "/dev/dashboard/profile?window=15"],
+  ["flame-graph", async () => "/dev/dashboard/profile?window=15", async (page) => {
+    await page.locator("#flame-title").scrollIntoViewIfNeeded();
+  }],
+  ["insight-slow-function", async () => "/dev/dashboard/insights", async (page) => {
+    const f = page.locator(".finding", { hasText: "Slow function" }).first();
+    if (await f.count()) await f.scrollIntoViewIfNeeded();
+  }],
+  ["job-trace", async (p) => {
+    // A job this demo process ran (so it has a trace): the explorer's job rows say `job_id=…`.
+    await p.goto(`${BASE}/dev/dashboard/traces?kind=job`, { waitUntil: "load" });
+    const text = await p.locator(".tx-path .mono").first().textContent();
+    const id = /job_id=(\d+)/.exec(text ?? "")?.[1];
+    if (!id) throw new Error("no job trace in the demo");
+    return `/admin/jobs/${id}`;
+  }, async (page) => {
+    await page.locator("#h-trace").scrollIntoViewIfNeeded();
+    await page.locator("[data-inline-wf] > summary").first().click();
+    await page.locator("[data-inline-wf] [data-waterfall]").first().waitFor({ timeout: 15_000 });
+  }],
   ["sql", async () => "/dev/dashboard/sql?sort=total"],
   ["n-plus-one", async () => "/dev/dashboard/sql", async (page) => { await page.locator("#n-plus-one").scrollIntoViewIfNeeded(); }],
   ["explain", async (p) => firstHref(p, "/dev/dashboard/sql?sort=count", "a[href*='/dev/dashboard/sql/']"), async (page) => {
@@ -133,7 +182,8 @@ const screens = [
     await page.locator(".ai-run .ai-step").nth(2).waitFor({ timeout: 60_000 });
     const href = await page.locator(".ai-run .ai-permalink").getAttribute("href");
     if (href) lastRun = href;
-    await page.locator(".ai-run").scrollIntoViewIfNeeded();
+    // The run's element is re-rendered as steps arrive: scroll its stable container.
+    await page.locator("[data-ai-panel]").scrollIntoViewIfNeeded();
   }, { base: AI_BASE }],
   ["ai-run-done", async () => `${lastRun}?wait=1`, async (page) => {
     await page.locator(".ai-end .ai-chart").first().waitFor({ timeout: 60_000 });

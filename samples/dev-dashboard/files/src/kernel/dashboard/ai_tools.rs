@@ -800,13 +800,10 @@ fn compare_windows(args: &Value) -> Result<String, String> {
             ((now - 2 * m, now - m), (now - m, now))
         }
     };
-    let (b, a) = {
-        let series = lock(&HUB.series);
-        (
-            agg(&series.between(before.0, before.1).0),
-            agg(&series.between(after.0, after.1).0),
-        )
-    };
+    let (b, a) = (
+        agg(&super::history::between(before.0, before.1).samples),
+        agg(&super::history::between(after.0, after.1).samples),
+    );
     let label = |w: (i64, i64)| format!("{}-{}", super::ai::clock(w.0), super::ai::clock(w.1));
     let mut s = format!(
         "## Before {} vs after {} (UTC)\nCite them as [chart:latency {}] and [chart:latency {}].\n\n",
@@ -950,10 +947,8 @@ fn get_series(args: &Value) -> Result<String, String> {
         "req" | "errors" | "sql" => format!("{v:.2}/s"),
         _ => format!("{v:.0}"),
     };
-    let (samples, marks) = {
-        let series = lock(&HUB.series);
-        (series.between(from, to).0, series.annotations(from, to))
-    };
+    let slice = super::history::between(from, to);
+    let (samples, marks) = (slice.samples, slice.marks);
     let points = super::charts::downsample(&samples, 24);
     let vals: Vec<f64> = samples.iter().map(value).collect();
     let mut s = format!(

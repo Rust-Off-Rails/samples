@@ -36,10 +36,11 @@ pub const IGNORED: &[&str] = &[
 /// The same SQL fingerprint more than this many times in one request is an N+1.
 pub const N_PLUS_ONE: u32 = 5; // APP: lower to catch smaller loops
 
-/// Per trace, at most this many spans and SQL statements are kept (counts stay exact).
-pub const MAX_SPANS: usize = 200;
-pub const MAX_SQL: usize = 200;
-pub const MAX_EVENTS: usize = 50;
+/// Per trace, at most this many spans, SQL statements and events are kept (counts stay exact; the
+/// waterfall says how many more ran). APP: a loop over method spans can open thousands.
+pub const MAX_SPANS: usize = 2_000;
+pub const MAX_SQL: usize = 1_000;
+pub const MAX_EVENTS: usize = 100;
 /// Slowest examples kept per route.
 pub const SLOWEST: usize = 3;
 
@@ -149,6 +150,10 @@ pub struct RequestCtx {
     pub request_id: String,
     /// Where the link came from: a path on this app, or another site's host.
     pub referrer: Option<String>,
+    /// `request`, or a background trace's kind (`job`, `mail`, `cron`).
+    pub kind: &'static str,
+    /// A background trace saw an error (it has no status code of its own).
+    pub failed: std::sync::atomic::AtomicBool,
     inner: Mutex<CtxInner>,
 }
 
@@ -177,8 +182,27 @@ impl RequestCtx {
             path: crate::kernel::ui::truncate(&crate::kernel::redact::path(path), 200),
             request_id,
             referrer: None,
+            kind: "request",
+            failed: std::sync::atomic::AtomicBool::new(false),
             inner: Mutex::new(CtxInner::default()),
         }
+    }
+
+    /// A trace that isn't a request: a job, a mail delivery, a scheduled task (`trace.rs` opens
+    /// one when a root span with that name starts outside a request).
+    pub fn background(kind: &'static str, name: &'static str, label: &str, id: String) -> Self {
+        let mut ctx = Self::new(
+            match kind {
+                "mail" => "MAIL",
+                "cron" => "CRON",
+                _ => "JOB",
+            },
+            name,
+            label,
+            id,
+        );
+        ctx.kind = kind;
+        ctx
     }
 
     /// Microseconds from the start of the request to `at`.
@@ -586,6 +610,50 @@ fn count_streamed_bytes(res: Response, method: &'static str, route: &'static str
 
 /// Turns the context into a trace and records it everywhere.
 pub fn finish(ctx: &RequestCtx, status: u16, bytes: Option<u64>) -> Arc<Trace> {
+    let trace = Arc::new(build(ctx, status, bytes));
+    {
+        let mut t = lock(&HUB.tick);
+        t.requests += 1;
+        match status {
+            500.. => t.e5 += 1,
+            400..=499 => t.e4 += 1,
+            _ => {}
+        }
+        t.latency.record(trace.dur_us);
+    }
+    if !trace.n_plus_one.is_empty() {
+        lock(&HUB.sql).flag_n_plus_one(&trace);
+    }
+    {
+        let mut http = lock(&HUB.http);
+        http.record(&trace);
+        if ctx.route == UNMATCHED {
+            http.not_found(ctx.method, &ctx.path, ctx.referrer.clone());
+        }
+    }
+    lock(&HUB.traces).push(trace.clone());
+    // Notable ones (5xx, N+1, slow) also go to the history file, batched off this path.
+    super::history::record_trace(&trace);
+    trace::request_line(&trace);
+    trace::export(&trace);
+    trace
+}
+
+/// A background trace (a job, a mail delivery) is done: kept with the requests' traces, without
+/// counting as a request on the charts.
+pub fn finish_background(ctx: &RequestCtx) -> Arc<Trace> {
+    let failed = ctx.failed.load(std::sync::atomic::Ordering::Relaxed);
+    let trace = Arc::new(build(ctx, if failed { 500 } else { 200 }, None));
+    if !trace.n_plus_one.is_empty() {
+        lock(&HUB.sql).flag_n_plus_one(&trace);
+    }
+    lock(&HUB.traces).push(trace.clone());
+    super::history::record_trace(&trace);
+    trace::export(&trace);
+    trace
+}
+
+fn build(ctx: &RequestCtx, status: u16, bytes: Option<u64>) -> Trace {
     let dur_us = ctx.started.elapsed().as_micros() as u64;
     let inner = std::mem::take(&mut *lock(&ctx.inner));
     let mut n_plus_one: Vec<(u64, u32, Arc<str>)> = inner
@@ -595,9 +663,11 @@ pub fn finish(ctx: &RequestCtx, status: u16, bytes: Option<u64>) -> Arc<Trace> {
         .map(|(fp, (n, sql))| (fp, n, sql))
         .collect();
     n_plus_one.sort_by_key(|x| std::cmp::Reverse(x.1));
-    let trace = Arc::new(Trace {
+    Trace {
         id: ctx.id,
         at: ctx.at,
+        kind: ctx.kind,
+        from_disk: false,
         method: ctx.method,
         route: ctx.route,
         path: ctx.path.clone(),
@@ -612,31 +682,7 @@ pub fn finish(ctx: &RequestCtx, status: u16, bytes: Option<u64>) -> Arc<Trace> {
         statements: inner.statements,
         sql_us: inner.sql_us,
         dropped: inner.dropped,
-    });
-    {
-        let mut t = lock(&HUB.tick);
-        t.requests += 1;
-        match status {
-            500.. => t.e5 += 1,
-            400..=499 => t.e4 += 1,
-            _ => {}
-        }
-        t.latency.record(dur_us);
     }
-    if !trace.n_plus_one.is_empty() {
-        lock(&HUB.sql).flag_n_plus_one(&trace);
-    }
-    {
-        let mut http = lock(&HUB.http);
-        http.record(&trace);
-        if ctx.route == UNMATCHED {
-            http.not_found(ctx.method, &ctx.path, ctx.referrer.clone());
-        }
-    }
-    lock(&HUB.traces).push(trace.clone());
-    trace::request_line(&trace);
-    trace::export(&trace);
-    trace
 }
 
 #[cfg(test)]
