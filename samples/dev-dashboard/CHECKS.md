@@ -74,6 +74,7 @@ The optional **Ask AI** agent is the one feature that sends data off the machine
 | "What am I looking at?" explains every card and panel without a key; the overview gives a deterministic health verdict and the "since you were away" digest | `what_am_i_looking_at_explains_every_part_without_a_key`, `the_health_summary_and_digest_render_on_the_overview` |
 | The Ask AI bar shows on other kernel pages in development, with that page's context, never doubling the dashboard's panel | `the_ai_bar_shows_on_other_kernel_pages_in_development` |
 | The watcher posts one incident card per signal and debounce window, investigated when a provider is set | `the_watcher_posts_incidents_and_investigates_within_its_limits` |
+| OpenRouter's optional attribution headers go to OpenAI-compatible providers only, checked at boot | `openrouter_attribution_headers_are_sent_when_set` |
 
 ## In a browser (not part of the test suite)
 

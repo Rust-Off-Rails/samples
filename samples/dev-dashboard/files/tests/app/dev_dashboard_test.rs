@@ -1772,6 +1772,39 @@ async fn the_ai_client_speaks_both_provider_shapes() {
     );
 }
 
+/// OpenRouter's optional attribution headers (`HTTP-Referer`, `X-Title`) go to an
+/// OpenAI-compatible provider when set (and show in the preview), never to Anthropic; the values
+/// are checked at boot.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn openrouter_attribution_headers_are_sent_when_set() {
+    use offrails_host::config::{ai_referer_ok, ai_title_ok};
+    assert!(ai_referer_ok("http://localhost:3000"));
+    assert!(ai_referer_ok("https://app.example.com"));
+    assert!(!ai_referer_ok("https://user:pw@app.example.com"));
+    assert!(!ai_referer_ok("javascript:alert(1)"));
+    assert!(ai_title_ok("My app dev dashboard"));
+    assert!(!ai_title_ok("line\nbreak"));
+    assert!(!ai_title_ok(&"x".repeat(65)));
+    let (base, seen) = mock_provider("Hi").await;
+    let mut o = ai_config(AiProvider::OpenAiCompatible, &format!("{base}/v1"));
+    o.referer = Some("http://localhost:3000".into());
+    o.title = Some("Demo dashboard".into());
+    ai::send(&o, &ai::body(&o, "s", "u"), Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert!(ai::header_lines(&o).contains(&"x-title: Demo dashboard".to_owned()));
+    let mut a = ai_config(AiProvider::Anthropic, &base);
+    a.referer = o.referer.clone();
+    a.title = o.title.clone();
+    ai::send(&a, &ai::body(&a, "s", "u"), Duration::from_secs(5))
+        .await
+        .unwrap();
+    let calls = seen.lock().unwrap().clone();
+    assert_eq!(calls[0].1["http-referer"], "http://localhost:3000");
+    assert_eq!(calls[0].1["x-title"], "Demo dashboard");
+    assert!(calls[1].1.get("x-title").is_none() && calls[1].1.get("http-referer").is_none());
+}
+
 /// Errors, a silent provider, an oversized answer and a redirect all end in a clear message;
 /// the redirect is never followed, so the key never reaches the other host.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

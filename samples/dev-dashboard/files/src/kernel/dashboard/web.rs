@@ -916,7 +916,8 @@ async fn charts_page(
             "/charts",
             live.then(|| format!("{}/stream?view=charts&range={}", mode.base, range.key())),
             range.refresh(),
-        ),
+        )
+        .ai(&state.config, ai::Tab::Overview, None),
         ranges: Range::ALL
             .iter()
             .map(|r| RangeLink {
@@ -3043,7 +3044,8 @@ async fn config_page(
             "/config",
             Some(format!("{}/stream?view=config", mode.base)),
             2,
-        ),
+        )
+        .ai(&state.config, ai::Tab::Dev, None),
         settings,
         env,
         system,
@@ -3152,7 +3154,8 @@ async fn lab_page(
             "/lab",
             Some("/dev/dashboard/stream?view=lab".into()),
             1,
-        ),
+        )
+        .ai(&state.config, ai::Tab::Overview, None),
         run: status.run,
         spike: status.spike,
         cards: cards(DEV),
@@ -3563,7 +3566,7 @@ async fn github_page(
     };
     ui::page(GithubPage {
         chrome: chrome(&state, "GitHub", "dashboard", flash, theme),
-        d: dash(DEV, "/github", None, 0),
+        d: dash(DEV, "/github", None, 0).ai(&state.config, ai::Tab::Tests, None),
         g,
         trend,
         rate,
