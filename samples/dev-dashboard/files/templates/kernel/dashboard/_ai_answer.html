@@ -1,8 +1,0 @@
-{# An answer, as escaped text blocks (ai::render): nothing the model writes becomes markup. #}
-<div class="ai-result">
-  {% if let Some(e) = a.error %}<p class="notice-inline" role="alert">{{ e }}</p>{% endif %}
-  {% if !a.blocks.is_empty() %}<div class="ai-text">{% for b in a.blocks %}{% match b %}{% when ai::Block::Heading with (xs) %}<h3>{% for x in xs %}{% include "kernel/dashboard/_ai_inline.html" %}{% endfor %}</h3>{% when ai::Block::Para with (xs) %}<p>{% for x in xs %}{% include "kernel/dashboard/_ai_inline.html" %}{% endfor %}</p>{% when ai::Block::List with (ordered, items) %}{% if *ordered %}<ol>{% else %}<ul>{% endif %}{% for xs in items %}<li>{% for x in xs %}{% include "kernel/dashboard/_ai_inline.html" %}{% endfor %}</li>{% endfor %}{% if *ordered %}</ol>{% else %}</ul>{% endif %}{% when ai::Block::Code with (code) %}<pre class="code" tabindex="0">{{ code }}</pre>{% endmatch %}{% endfor %}</div>{% endif %}
-  {% if let Some(n) = a.note %}<p class="hint">{{ n }}</p>{% endif %}
-  {% if !a.usage.is_empty() %}<p class="muted small">{{ a.usage }}</p>{% endif %}
-  {% if !a.sent.is_empty() %}<details class="ai-preview"><summary>What was sent</summary><pre class="code ai-json" tabindex="0">{{ a.sent }}</pre></details>{% endif %}
-</div>

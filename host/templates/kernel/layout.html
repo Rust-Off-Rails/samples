@@ -15,6 +15,7 @@
   <script src="{{ chrome.assets.admin_js }}" defer></script>
   {% for src in chrome.scripts %}<script src="{{ src }}" defer></script>
   {% endfor %}
+  {# samples: kernel head #}
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
@@ -45,6 +46,7 @@
     <div class="flash {% if flash.is_alert() %}flash-alert{% else %}flash-notice{% endif %}" role="status">{{ flash.message }}</div>
   {% endif %}
   <main id="main">
+    {# samples: kernel main #}
     {% block content %}{% endblock %}
   </main>
 </body>

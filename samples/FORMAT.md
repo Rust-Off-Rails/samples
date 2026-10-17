@@ -117,6 +117,7 @@ The anchors `host/` provides (each file says what goes there):
 | `src/main.rs` | `cli commands`, `cli dispatch`, `serve start`, `serve stop`, `tracing layers` (a `Box::new(…)` layer beside the log formatter) |
 | `migration/src/lib.rs` | `migration mods`, `migrations` |
 | `templates/layouts/application.html` | `dev footer links` |
+| `templates/kernel/layout.html` | `kernel head` (a `<link>` or `<script>` every kernel page loads, usually inside an `{% if %}`), `kernel main` (markup at the top of every kernel page's `<main>`, e.g. the dev dashboard's Ask AI bar); `chrome` is in scope, `chrome.theme.return_to` is the page's path and query |
 | `templates/shared/_nav.html` | `nav links` |
 | `tests/app/main.rs` | `test mods` |
 | `tests/app/support.rs` | `test support` (methods on `TestApp`) |

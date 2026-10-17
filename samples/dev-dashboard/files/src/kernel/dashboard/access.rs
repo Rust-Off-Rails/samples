@@ -157,7 +157,7 @@ fn basic_password(parts: &Parts) -> Option<String> {
 /// nothing) with a branch-free fold over every byte: no early exit that would hint how much of a
 /// guess was right. Best effort: the compiler may still optimize, which is why the rate limit, not
 /// this, is the real guard.
-fn same_secret(given: &str, expected: &str) -> bool {
+pub fn same_secret(given: &str, expected: &str) -> bool {
     let a = Sha256::digest(given.as_bytes());
     let b = Sha256::digest(expected.as_bytes());
     a.iter()
