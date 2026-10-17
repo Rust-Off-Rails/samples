@@ -38,7 +38,7 @@
 .ai-prompts .chip { display: inline-block; cursor: pointer; font: inherit; font-size: .8rem; white-space: normal; text-align: left; min-height: 28px; padding: .1rem .55rem; border-radius: 6px; border: 1px solid var(--border); color: var(--fg); background: var(--ai-sunk); }
 .ai-prompts .chip:hover { border-color: var(--accent); }
 .ai-label { font-size: .82rem; color: var(--muted); }
-.ai-preview summary { cursor: pointer; font-size: .85rem; }
+.ai-preview summary, .ai-fix summary { cursor: pointer; font-size: .85rem; min-height: 24px; display: flex; align-items: center; gap: .3rem; flex-wrap: wrap; }
 .ai-preview summary .muted { font-size: .78rem; }
 .ai-preview .hint, .ai-body .hint, .ai-run .hint { margin: .3rem 0; color: var(--muted); font-size: .85rem; }
 .ai-toolnames { display: flex; flex-wrap: wrap; gap: .25rem; margin: .3rem 0; font-size: .74rem; }
@@ -65,7 +65,7 @@
 .ai-step { position: relative; padding-left: 1.6rem; counter-increment: step; min-width: 0; }
 .ai-step::before { content: counter(step); position: absolute; left: 0; top: .1rem; width: 1.15rem; height: 1.15rem; border-radius: 50%; font-size: .7rem; line-height: 1.15rem; text-align: center; background: color-mix(in srgb, var(--accent) 16%, var(--panel)); color: var(--accent); font-weight: 700; }
 .ai-step.is-error::before { background: color-mix(in srgb, var(--ai-err) 16%, var(--panel)); color: var(--ai-err); }
-.ai-step summary { cursor: pointer; font-size: .86rem; display: flex; flex-wrap: wrap; gap: .2rem .5rem; align-items: baseline; }
+.ai-step summary { cursor: pointer; font-size: .86rem; display: flex; flex-wrap: wrap; gap: .2rem .5rem; align-items: baseline; min-height: 24px; padding: .1rem 0; }
 .ai-step-title { font-weight: 600; }
 .ai-call { font-size: .76rem; color: var(--muted); overflow-wrap: anywhere; }
 .ai-call::before { content: "→ "; }
@@ -87,7 +87,7 @@
 a.cite:hover { background: color-mix(in srgb, var(--accent) 18%, var(--panel)); }
 .cite-file { color: var(--fg); border-color: var(--border); background: var(--ai-sunk); }
 .cite-chart { color: var(--ai-s2); border-color: color-mix(in srgb, var(--ai-s2) 40%, var(--border)); background: color-mix(in srgb, var(--ai-s2) 9%, var(--panel)); }
-.ai-chart { margin: .5rem 0; padding: .5rem .6rem; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+.ai-chart { max-width: 46rem; margin: .5rem 0; padding: .5rem .6rem; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
 .ai-chart figcaption { display: flex; flex-wrap: wrap; gap: .2rem .7rem; align-items: baseline; font-size: .82rem; }
 .ai-chart-legend { display: flex; flex-wrap: wrap; gap: .1rem .6rem; color: var(--muted); font-size: .76rem; }
 .ai-key::before { content: ""; display: inline-block; width: .7rem; height: 2px; margin-right: .3rem; vertical-align: middle; background: var(--c, var(--ai-s1)); }
@@ -112,7 +112,6 @@ a.cite:hover { background: color-mix(in srgb, var(--accent) 18%, var(--panel)); 
 .ai-reason { font-size: .82rem; color: var(--muted); overflow-wrap: anywhere; }
 .ai-fix { display: grid; gap: .35rem; justify-items: start; }
 .ai-fix details { width: 100%; }
-.ai-fix summary { cursor: pointer; font-size: .85rem; }
 .ai-fix-text { font-size: .76rem; max-height: 20rem; overflow: auto; }
 .ai-copied { font-size: .8rem; color: var(--ai-ok); min-height: 1em; }
 

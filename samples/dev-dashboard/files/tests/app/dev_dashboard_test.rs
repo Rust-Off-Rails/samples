@@ -2471,7 +2471,7 @@ async fn proposed_actions_are_validated_and_render_as_buttons() {
                     ("t3", "propose_action", json!({ "kind": "run_scenario", "target": "rm -rf", "reason": "no" })),
                 ],
             ),
-            a_text("Run the scenario, then look at the SQL."),
+            a_text("Run the scenario, then look at the SQL.\n\n## Fix\nIn [file:src/routes.rs:1], batch the lookups.\n\n## Test\nA query-count test for the page."),
         ],
         Duration::ZERO,
     )
@@ -2486,6 +2486,17 @@ async fn proposed_actions_are_validated_and_render_as_buttons() {
     assert!(page.contains("Run the N+1 scenario"));
     assert!(page.contains("href=\"/dev/dashboard/sql\""));
     assert!(!page.contains("rm -rf\""));
+    // The fix prompt: the question, the evidence resolved, where, the change, the test, done-means.
+    assert!(page.contains("Copy fix prompt for your coding agent"));
+    for part in [
+        "## What was asked\nHow do I see it?",
+        "- source: src/routes.rs:1",
+        "## Suggested change\nIn [file:src/routes.rs:1], batch the lookups.",
+        "## Test to add\nA query-count test for the page.",
+        "offrails-check",
+    ] {
+        assert!(unescape(&page).contains(part), "{part}");
+    }
     assert!(!HUB.lab.busy(), "proposing runs nothing");
 }
 
@@ -3124,7 +3135,7 @@ async fn the_health_summary_and_digest_render_on_the_overview() {
         .assert_text("Health summary")
         .assert_contains("class=\"ai-chart\"")
         .assert_contains("href=\"/dev/dashboard/traces/1\"")
-        .assert_text("Copy fix prompt for your coding agent");
+        .assert_not_contains("Copy fix prompt");
     let first_user = seen.lock().unwrap()[0].2["messages"][0]["content"]
         .as_str()
         .unwrap()

@@ -277,7 +277,12 @@ pub fn run_view(rec: &Record, live: bool) -> RunView {
         },
         page: format!("{base}/ai/runs/{}", rec.id),
         kind: rec.kind.label(),
-        question: rec.question.clone(),
+        // The health question is long and fixed; the page names it.
+        question: if rec.kind == Kind::Health {
+            "How healthy is this app right now? (the verdict, what's healthy, what needs attention, what to fix first, with evidence)".to_owned()
+        } else {
+            rec.question.clone()
+        },
         status: rec.status.key(),
         status_text,
         steps: rec.steps.clone(),
@@ -841,7 +846,11 @@ async fn history_page(
         .map(|r| HistoryRow {
             kind: r.kind.label(),
             tab: r.tab.clone(),
-            question: ui::truncate(&r.question, 160),
+            question: if r.kind == Kind::Health {
+                "How healthy is this app right now?".to_owned()
+            } else {
+                ui::truncate(&r.question, 160)
+            },
             status: r.status.key(),
             status_text: match &r.status {
                 Status::Stopped(w) | Status::Failed(w) => ui::truncate(w, 80),

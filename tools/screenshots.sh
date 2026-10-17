@@ -33,8 +33,9 @@ BASE="$base" OUT="$root/docs/screenshots" INSTALLED="$installed" node tools/scre
 if [ $# -eq 0 ] || printf '%s\n' "$@" | grep -qx dev-dashboard; then
   case " $installed " in
     *" dev-dashboard "*)
-      # "Ask AI" with an answer: a loopback mock provider (tools/screenshots/ai-mock.mjs, canned
-      # answers, no real API) and a second demo server pointed at it, both stopped by PID after.
+      # "Ask AI" as an agent: a loopback mock provider (tools/screenshots/ai-mock.mjs: a scripted,
+      # clearly fake tool-calling investigation, no real API) and a second demo server pointed at
+      # it, with the watcher on (incident cards); both stopped by PID after.
       port=${base##*:}
       mock_port=$((port + 9))
       ai_port=$((port + 1))
@@ -44,6 +45,7 @@ if [ $# -eq 0 ] || printf '%s\n' "$@" | grep -qx dev-dashboard; then
         mock_pid=$!
         (cd demo/app && PORT=$ai_port DASHBOARD_AI_PROVIDER=openai-compatible \
           DASHBOARD_AI_BASE_URL="http://127.0.0.1:$mock_port/v1" DASHBOARD_AI_MODEL=demo-model \
+          DASHBOARD_AI_PROACTIVE=true \
           exec ../app-bin serve) > demo/ai-server.log 2>&1 &
         ai_pid=$!
         trap 'kill "$ai_pid" "$mock_pid" 2>/dev/null || true' EXIT

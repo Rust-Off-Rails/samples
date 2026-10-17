@@ -871,10 +871,13 @@ fn evidence_line(kind: &str, value: &str) -> Option<String> {
 /// evidence it cited (resolved), the file and line, the suggested change, the test to add, the
 /// guides, and the Definition of Done. Paste it into Claude Code, opencode, or any agent.
 pub fn fix_prompt(rec: &Record) -> Option<String> {
-    if rec.answer.trim().is_empty() {
+    let cites = citations(&rec.answer);
+    // Only an answer that proposes a change gets one (a `## Fix` section, or code it points at).
+    if rec.answer.trim().is_empty()
+        || (section(&rec.answer, "fix").is_none() && !cites.iter().any(|(k, _)| k == "file"))
+    {
         return None;
     }
-    let cites = citations(&rec.answer);
     let evidence: Vec<String> = cites
         .iter()
         .filter_map(|(k, v)| evidence_line(k, v))

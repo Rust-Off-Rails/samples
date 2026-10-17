@@ -14,6 +14,27 @@ const AXE = process.env.AXE === "1";
 const only = process.argv.slice(2);
 const axeSource = readFileSync(new URL("./node_modules/axe-core/axe.min.js", import.meta.url), "utf8");
 
+// Ask AI's runs: one owner cookie for every AI context (so a run started in one shot can be
+// reopened in the next), and at most 5 runs a minute (the dashboard allows 6, PER_MINUTE).
+const OWNER = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
+let lastRun = "/dev/dashboard/ai/history";
+const runsAt = [];
+const throttle = async () => {
+  const minute = () => runsAt.filter((t) => Date.now() - t < 61_000);
+  while (minute().length >= 5) await new Promise((r) => setTimeout(r, 2_000));
+  runsAt.push(Date.now());
+};
+// The AI server is a second process with its own numbers: give it traffic too (and an N+1, so its
+// watcher posts an incident).
+let aiTrafficUntil = 0;
+const ensureAiTraffic = async () => {
+  if (!AI_BASE || Date.now() < aiTrafficUntil) return;
+  const body = new URLSearchParams({ paths: "/dev/lab/orders\n/dev/lab/orders/n-plus-one\n/dev/lab/slow\n/", rps: "8", secs: "60" });
+  await fetch(`${AI_BASE}/dev/dashboard/lab/traffic`, { method: "POST", body, redirect: "manual" });
+  aiTrafficUntil = Date.now() + 61_000;
+  await new Promise((r) => setTimeout(r, 3000));
+};
+
 // The first link matching `selector` on `path`.
 const firstHref = async (page, path, selector) => {
   await page.goto(`${BASE}${path}`, { waitUntil: "load" });
@@ -65,12 +86,47 @@ const screens = [
     await page.locator("[data-ai-panel] > summary").click();
     await page.locator(".ai-setup").waitFor();
   }],
-  ["ai-answer", async () => "/dev/dashboard/sql", async (page) => {
+  // Ask AI as an agent, against tools/screenshots/ai-mock.mjs (a scripted, clearly fake
+  // investigation): the health summary, a run mid-stream and finished (citations, an inline
+  // chart, a proposed action, the fix prompt), the history, an incident card, the bar on the
+  // mailbox and jobs pages. "What am I looking at?" needs no key.
+  ["ai-explain", async () => "/dev/dashboard/explain"],
+  ["ai-health", async () => "/dev/dashboard", async (page) => {
+    await throttle();
+    await page.locator("#health [data-ai-send]").click();
+    await page.locator("#health .ai-end .ai-text").waitFor({ timeout: 90_000 });
+    await page.locator("#health").scrollIntoViewIfNeeded();
+  }, { base: AI_BASE }],
+  ["ai-run-live", async () => "/dev/dashboard/sql", async (page) => {
     await page.locator("[data-ai-panel] > summary").click();
     await page.locator("[data-ai-prompt]").first().click();
+    await throttle();
     await page.locator("[data-ai-send]").click();
-    await page.locator(".ai-result .ai-text").waitFor();
-    await page.locator("[data-ai-panel]").scrollIntoViewIfNeeded();
+    await page.locator(".ai-run .ai-step").nth(2).waitFor({ timeout: 60_000 });
+    const href = await page.locator(".ai-run .ai-permalink").getAttribute("href");
+    if (href) lastRun = href;
+    await page.locator(".ai-run").scrollIntoViewIfNeeded();
+  }, { base: AI_BASE }],
+  ["ai-run-done", async () => `${lastRun}?wait=1`, async (page) => {
+    await page.locator(".ai-end .ai-chart").first().waitFor({ timeout: 60_000 });
+    await page.locator(".ai-end").scrollIntoViewIfNeeded();
+  }, { base: AI_BASE }],
+  ["ai-history", async () => "/dev/dashboard/ai/history", null, { base: AI_BASE }],
+  ["ai-incident", async () => "/dev/dashboard/insights", async (page) => {
+    await page.locator("#incidents .incident-story").first().waitFor({ timeout: 120_000 });
+    await page.locator("#incidents").scrollIntoViewIfNeeded();
+  }, { base: AI_BASE }],
+  ["ai-mailbox", async () => "/dev/mailbox", async (page) => {
+    await page.locator(".ai-bar > summary").click();
+    await page.locator(".ai-bar [data-ai-prompt]").first().click();
+    await throttle();
+    await page.locator(".ai-bar [data-ai-send]").click();
+    await page.locator(".ai-bar .ai-end .ai-text").waitFor({ timeout: 60_000 });
+    await page.locator(".ai-bar").scrollIntoViewIfNeeded();
+  }, { base: AI_BASE }],
+  ["ai-jobs", async () => "/admin/jobs", async (page) => {
+    await page.locator(".ai-bar > summary").click();
+    await page.locator(".ai-bar [data-ai-form]").waitFor();
   }, { base: AI_BASE }],
   ["tests", async () => "/dev/dashboard/tests"],
   ["github", async () => "/dev/dashboard/github"],
@@ -102,6 +158,10 @@ try {
           colorScheme: theme, reducedMotion: "reduce",
         });
         if (opt.cookie) await context.addCookies([{ name: "offrails_theme", value: opt.cookie, url: base }]);
+        if (base === AI_BASE) {
+          await context.addCookies([{ name: "dashboard_ai", value: OWNER, url: base }]);
+          await ensureAiTraffic();
+        }
         const page = await context.newPage();
         const errors = [];
         page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
