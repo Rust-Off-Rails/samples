@@ -11,7 +11,7 @@ set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 started=0
-if ! tools/demo.sh status | grep -q running; then
+if ! tools/demo.sh status | grep -q '^running'; then
   tools/demo.sh all --port "${PORT:-4000}"
   started=1
 fi

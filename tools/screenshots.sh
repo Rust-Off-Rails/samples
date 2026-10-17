@@ -13,7 +13,7 @@
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
-if ! tools/demo.sh status | grep -q running; then
+if ! tools/demo.sh status | grep -q '^running'; then
   tools/demo.sh all --port "${PORT:-3900}"
 fi
 base=$(cat demo/demo.url)
