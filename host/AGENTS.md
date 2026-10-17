@@ -4,7 +4,7 @@
 
 ```
 APP:            offrails_host
-FRAMEWORK:      Rust off Rails 0.6.2 (.offrails/, vendored 2026-10-16)
+FRAMEWORK:      Rust off Rails 0.7.0 (.offrails/, vendored 2026-10-17)
 FRONTEND_MODE:  htmx
 UI_LIBRARY:     none   (none = no JS UI: htmx without islands, or api)
 ISLANDS:        no
