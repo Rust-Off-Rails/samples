@@ -339,7 +339,10 @@ pub async fn detect(state: &AppState) -> Vec<Signal> {
             out.push(Signal {
                 key: "jobs".into(),
                 kind: "job failures",
-                title: format!("{n} jobs are failing (retryable or discarded)"),
+                title: format!(
+                    "{n} job{} failing (retryable or discarded)",
+                    if n == 1 { " is" } else { "s are" }
+                ),
                 evidence: format!(
                     "{n} jobs retryable or discarded, {} at the last check",
                     prev.unwrap_or(0)
@@ -389,7 +392,11 @@ pub async fn detect(state: &AppState) -> Vec<Signal> {
         out.push(Signal {
             key: format!("tests:{}", run.id),
             kind: "failing tests",
-            title: format!("{} tests failed in the latest run", run.failed()),
+            title: format!(
+                "{} test{} failed in the latest run",
+                run.failed(),
+                if run.failed() == 1 { "" } else { "s" }
+            ),
             evidence: format!("run {} ({}): {} failed", run.id, run.source, run.failed()),
             href: "/dev/dashboard/tests".into(),
             severity: "high",

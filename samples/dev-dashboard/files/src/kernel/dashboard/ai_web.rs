@@ -42,6 +42,12 @@ use crate::kernel::theme::ThemeSwitch;
 use crate::kernel::ui::{self, Chrome};
 use crate::state::AppState;
 
+/// How long the no-JavaScript path waits for a run before showing it as it stands (with a link
+/// that waits again).
+/// WHY: under the app's 30 s request timeout (routes.rs answers 503 past it); the run itself
+/// goes on in the background either way.
+pub const NO_JS_WAIT: Duration = Duration::from_secs(25);
+
 /// The Ask AI routes under `base` (`read_routes` merges them into both dashboards).
 pub fn routes(base: &'static str) -> Router<AppState> {
     let p = |s: &str| format!("{base}{s}");
@@ -686,8 +692,9 @@ async fn ai_runs(
     Ok(with_cookie(res, set))
 }
 
-/// `POST {base}/ai/ask`: starts a run and waits for it (up to `RUN_TIMEOUT`), then answers the
-/// finished run: a fragment with `x-dashboard-fragment`, else the whole page.
+/// `POST {base}/ai/ask`: starts a run and waits for it (up to `NO_JS_WAIT`), then answers the run
+/// (finished, or as far as it got, with a link that waits again): a fragment with
+/// `x-dashboard-fragment`, else the whole page.
 async fn ai_ask(
     State(state): State<AppState>,
     Extension(mode): Extension<Mode>,
@@ -705,7 +712,7 @@ async fn ai_ask(
     let (cookie_value, set) = owner(&headers, state.config.is_production());
     let view = match start_run(&state, mode, &f, cookie_value) {
         Ok(run) => {
-            ai_agent::wait(&run, ai::RUN_TIMEOUT + Duration::from_secs(5)).await;
+            ai_agent::wait(&run, NO_JS_WAIT).await;
             let rec = run.record();
             run_view(&rec, !rec.status.finished())
         }
@@ -752,7 +759,7 @@ async fn run_page(
             return Err(AppError::NotFound);
         }
         if q.wait.is_some() {
-            ai_agent::wait(&run, ai::RUN_TIMEOUT + Duration::from_secs(5)).await;
+            ai_agent::wait(&run, NO_JS_WAIT).await;
         }
         run.record()
     } else {

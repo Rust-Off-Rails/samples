@@ -154,9 +154,14 @@ async fn every_dashboard_page_renders_with_its_own_assets() {
 /// The stylesheet follows the theme switch: light-dark() tokens, no prefers-color-scheme blocks.
 #[test]
 fn the_dashboard_stylesheet_follows_the_theme_switch() {
-    let css = std::fs::read_to_string("static/kernel/dashboard.css").unwrap();
-    assert!(!css.contains("prefers-color-scheme"));
-    assert!(css.contains("light-dark("));
+    for file in [
+        "static/kernel/dashboard.css",
+        "static/kernel/dashboard-ai.css",
+    ] {
+        let css = std::fs::read_to_string(file).unwrap();
+        assert!(!css.contains("prefers-color-scheme"), "{file}");
+        assert!(css.contains("light-dark("), "{file}");
+    }
 }
 
 /// The dashboard replaces the host's System and Routes tabs; their pages stay as the fallback.

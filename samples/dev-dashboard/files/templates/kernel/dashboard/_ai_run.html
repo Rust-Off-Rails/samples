@@ -10,7 +10,7 @@
   </header>
   <p class="ai-q">{{ r.question }}</p>
   <ol class="ai-steps" data-ai-steps>{% for s in r.steps %}{% include "kernel/dashboard/_ai_step.html" %}{% endfor %}</ol>
-  {% if r.live %}<noscript><p class="hint"><a href="{{ r.page }}?wait=1">Wait for the answer</a> (this page updates live with JavaScript).</p></noscript>{% endif %}
+  {% if r.live %}<noscript><p class="hint">Still investigating. <a href="{{ r.page }}?wait=1">Wait for the answer</a> (with JavaScript this page updates live).</p></noscript>{% endif %}
   <div class="ai-end" data-ai-end>{% if !r.live %}{% include "kernel/dashboard/_ai_run_end.html" %}{% endif %}</div>
 {% endif %}
 </article>
