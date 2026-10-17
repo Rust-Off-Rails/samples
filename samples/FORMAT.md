@@ -134,6 +134,7 @@ Samples that own a shared file add anchors of their own for the samples that dep
 |------|--------|---------|
 | `src/mailers/mod.rs` | mailer | `mailer mods` (`pub mod <name>_mailer;`) |
 | `src/mailers/previews.rs` | mailer | `previews` (a `Preview { … },` in `PREVIEWS`) |
+| `src/models/auth_event.rs` | auth-core | `auth events` (in `auth_event::record`, before the row is written: every audit event, with `kind`, `user_id` and `meta` in scope) |
 | `src/controllers/auth.rs` | auth-core | `sessions ended` (in `auth::sessions_ended(state, user_id)`, called after every commit that ends sessions); the auth samples' other anchors are listed in their READMEs |
 | `src/channels/mod.rs` | realtime | `channel mods` |
 | `src/channels/identity.rs` | realtime | `identity source` (an explicit `pub use` of another people source, above the guests' glob) |
