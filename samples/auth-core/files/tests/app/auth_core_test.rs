@@ -112,7 +112,10 @@ async fn auth_js_loads_from_the_layout_on_every_page() {
     for path in ["/", "/session/new"] {
         let page = app.get(path).await;
         page.assert_ok();
-        let tags = page.body.matches(r#"<script src="/static/auth.js?v="#).count();
+        let tags = page
+            .body
+            .matches(r#"<script src="/static/auth.js?v="#)
+            .count();
         assert_eq!(tags, 1, "{path}: one digested auth.js tag");
     }
     let source = std::fs::read_to_string("static/auth.js").unwrap();

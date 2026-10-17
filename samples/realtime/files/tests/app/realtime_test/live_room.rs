@@ -287,7 +287,9 @@ async fn the_layout_loads_the_live_room_scripts_and_dev_sockets_links_are_not_bo
     home.assert_ok();
     for script in ["/static/channels.js?v=", "/static/live_room.js?v="] {
         assert_eq!(
-            home.body.matches(&format!(r#"<script src="{script}"#)).count(),
+            home.body
+                .matches(&format!(r#"<script src="{script}"#))
+                .count(),
             1,
             "{script}"
         );
