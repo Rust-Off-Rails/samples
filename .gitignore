@@ -4,3 +4,4 @@
 /demo/
 /.cache/
 /tools/screenshots/node_modules/
+/demo.local.env

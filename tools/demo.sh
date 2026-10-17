@@ -108,6 +108,11 @@ if grep -q "installed sample dev-dashboard " docs/decisions.md; then
   printf 'GITHUB_REPO=example-org/example-app\nDASHBOARD_GITHUB_FIXTURE=tests/fixtures/github\nDASHBOARD_DEMO_HISTORY=true\n' >> .env
   "$demo/app-bin" routes >/dev/null
 fi
+# Your own settings (an AI provider key, say) survive rebuilds in demo.local.env at the repo root:
+# git-ignored, appended last so it wins, never printed.
+if [ -f "$root/demo.local.env" ]; then
+  cat "$root/demo.local.env" >> .env
+fi
 # Demo accounts: fake, documented credentials (samples/auth-core, src/tasks/auth_demo.rs).
 rm -f "$demo/credentials.txt"
 if grep -q "installed sample auth-core " docs/decisions.md; then
