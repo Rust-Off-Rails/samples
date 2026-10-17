@@ -16,7 +16,7 @@
 //! | Load lab: fake data, traffic, scenarios | `/dev/dashboard/lab`, `/dev/lab/*`, `app bench` | `lab.rs` |
 //! | Insights, routes explorer, schema | everything above, the catalog, CSP reports | `insights.rs`, `route_explorer.rs`, `schema.rs` |
 //! | Schema diagram (ERD), migrations timeline and drift | the catalog, `seaql_migrations`, `migration/src/*.rs` | `erd.rs`, `migrations.rs` |
-//! | Ask AI (optional, your own provider) | the above, already redacted | `ai.rs`, `ai_context.rs` |
+//! | Ask AI (optional, your own provider): an agent with read-only tools, live runs, history, incidents | the above, already redacted | `ai.rs`, `ai_context.rs`, `ai_tools.rs`, `ai_agent.rs`, `ai_watch.rs`, `ai_explain.rs`, `ai_web.rs` |
 //! | Test runs and CI | `storage/test-runs/`, the GitHub API | `testruns.rs`, `github.rs` |
 //!
 //! WHY one process-wide hub (`HUB`) and not a field on `AppState`: the tracing layer is installed
@@ -25,7 +25,12 @@
 pub mod access;
 // samples: dashboard mods
 pub mod ai;
+pub mod ai_agent;
 pub mod ai_context;
+pub mod ai_explain;
+pub mod ai_tools;
+pub mod ai_watch;
+pub mod ai_web;
 pub mod charts;
 pub mod cli;
 pub mod collector;
@@ -186,6 +191,11 @@ pub fn instrument(db: DatabaseConnection, config: &Config) -> DatabaseConnection
         return db;
     }
     HUB.enable(config.is_development());
+    // The Ask AI bar on other kernel pages (the kernel layout's wire asks `ai_web::bar`).
+    ai_web::BAR.store(
+        ai::allowed(config, false),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     let mut db = db;
     db.set_metric_callback(sql::record);
     db
@@ -218,6 +228,8 @@ pub fn serve_started(state: &crate::state::AppState) {
         });
     }
     collector::spawn(state.clone());
+    // DASHBOARD_AI_PROACTIVE=true (development): the watcher and its incident cards.
+    ai_watch::spawn(state.clone());
 }
 
 /// The numbers an agent asks for first (`/dev/dashboard.json`, `app introspect`).

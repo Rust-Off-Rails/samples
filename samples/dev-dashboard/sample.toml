@@ -186,6 +186,15 @@ pub struct DashboardAi {
     pub model: String,
     /// `DASHBOARD_AI_IN_PRODUCTION=true`: also in the read-only `/admin/dashboard`, behind its gate.
     pub in_production: bool,
+    /// `DASHBOARD_AI_PROACTIVE=true` (development only): the watcher posts incident cards and, with
+    /// a provider, investigates each signal once (debounced, budgeted).
+    pub proactive: bool,
+    /// `DASHBOARD_AI_TOOLS=core`: offer the agent its small-model tool set (`ai_tools` `core`).
+    pub tools_core: bool,
+    /// `DASHBOARD_AI_REFERER`, `DASHBOARD_AI_TITLE`: OpenRouter's optional app attribution
+    /// headers (`HTTP-Referer`, `X-Title`), sent to OpenAI-compatible providers.
+    pub referer: Option<String>,
+    pub title: Option<String>,
 }
 
 impl DashboardAi {
@@ -221,22 +230,69 @@ impl DashboardAi {
                 invalid.push("DASHBOARD_AI_API_KEY (required for anthropic)");
             }
         }
-        let in_production = match get("DASHBOARD_AI_IN_PRODUCTION").as_deref() {
+        let flag = |name: &str, invalid: &mut Vec<&'static str>, why: &'static str| match get(name)
+            .as_deref()
+        {
             None | Some("false") | Some("0") => false,
             Some("true") | Some("1") => true,
             Some(_) => {
-                invalid.push("DASHBOARD_AI_IN_PRODUCTION (expected true or false)");
+                invalid.push(why);
                 false
             }
         };
+        let in_production = flag(
+            "DASHBOARD_AI_IN_PRODUCTION",
+            invalid,
+            "DASHBOARD_AI_IN_PRODUCTION (expected true or false)",
+        );
+        let proactive = flag(
+            "DASHBOARD_AI_PROACTIVE",
+            invalid,
+            "DASHBOARD_AI_PROACTIVE (expected true or false)",
+        );
+        let tools_core = match get("DASHBOARD_AI_TOOLS").as_deref() {
+            None | Some("all") => false,
+            Some("core") => true,
+            Some(_) => {
+                invalid.push("DASHBOARD_AI_TOOLS (expected all or core)");
+                false
+            }
+        };
+        let referer = get("DASHBOARD_AI_REFERER");
+        if referer.as_deref().is_some_and(|r| !ai_referer_ok(r)) {
+            invalid.push("DASHBOARD_AI_REFERER (an http(s) URL without credentials)");
+        }
+        let title = get("DASHBOARD_AI_TITLE");
+        if title.as_deref().is_some_and(|t| !ai_title_ok(t)) {
+            invalid.push("DASHBOARD_AI_TITLE (1 to 64 printable ASCII characters)");
+        }
         Self {
             provider,
             api_key,
             base_url,
             model,
             in_production,
+            proactive,
+            tools_core,
+            referer,
+            title,
         }
     }
+}
+
+/// `DASHBOARD_AI_REFERER`: a plain http(s) URL (it only names the app to OpenRouter).
+pub fn ai_referer_ok(raw: &str) -> bool {
+    reqwest::Url::parse(raw).is_ok_and(|u| {
+        matches!(u.scheme(), "http" | "https")
+            && u.username().is_empty()
+            && u.password().is_none()
+            && raw.len() <= 200
+    })
+}
+
+/// `DASHBOARD_AI_TITLE`: a short header value.
+pub fn ai_title_ok(raw: &str) -> bool {
+    !raw.is_empty() && raw.len() <= 64 && raw.bytes().all(|b| (0x20..0x7f).contains(&b))
 }
 
 /// SECURITY: the assistant's address comes from the environment only, and is https unless it is
@@ -275,6 +331,10 @@ impl fmt::Debug for DashboardAi {
             .field("base_url", &self.base_url)
             .field("model", &self.model)
             .field("in_production", &self.in_production)
+            .field("proactive", &self.proactive)
+            .field("tools_core", &self.tools_core)
+            .field("referer", &self.referer)
+            .field("title", &self.title)
             .finish()
     }
 }
@@ -398,9 +458,14 @@ text = '''
 ("GET",  "/dev/dashboard/schema/erd.mmd",         "web::erd_mermaid",  Access::Dev),
 ("GET",  "/dev/dashboard/schema/tables/{name}",   "web::schema_table", Access::Dev),
 ("GET",  "/dev/dashboard/schema/migrations",      "web::migrations_page", Access::Dev),
-("GET",  "/dev/dashboard/ai",                     "web::ai_page",      Access::Dev),
-("GET",  "/dev/dashboard/ai/panel",               "web::ai_panel",     Access::Dev),
-("POST", "/dev/dashboard/ai/ask",                 "web::ai_ask",       Access::Dev),
+("GET",  "/dev/dashboard/ai",                     "ai_web::ai_page",   Access::Dev),
+("GET",  "/dev/dashboard/ai/panel",               "ai_web::ai_panel",  Access::Dev),
+("POST", "/dev/dashboard/ai/ask",                 "ai_web::ai_ask",    Access::Dev),
+("POST", "/dev/dashboard/ai/runs",                "ai_web::ai_runs",   Access::Dev),
+("GET",  "/dev/dashboard/ai/runs/{id}",           "ai_web::run_page",  Access::Dev),
+("GET",  "/dev/dashboard/ai/runs/{id}/stream",    "ai_web::run_stream", Access::Dev),
+("GET",  "/dev/dashboard/ai/history",             "ai_web::history_page", Access::Dev),
+("GET",  "/dev/dashboard/explain",                "ai_web::explain_page", Access::Dev),
 ("GET",  "/dev/dashboard/tests",                  "web::tests_page",   Access::Dev),
 ("POST", "/dev/dashboard/tests/run",              "web::tests_run",    Access::Dev),
 ("GET",  "/dev/dashboard/github",                 "web::github_page",  Access::Dev),
@@ -429,9 +494,14 @@ text = '''
 ("GET",  "/admin/dashboard/sql/{id}",             "web::sql_show",     Access::Admin),
 ("GET",  "/admin/dashboard/config",               "web::config_page",  Access::Admin),
 ("GET",  "/admin/dashboard/stream",               "web::stream",       Access::Admin),
-("GET",  "/admin/dashboard/ai",                   "web::ai_page",      Access::Admin),
-("GET",  "/admin/dashboard/ai/panel",             "web::ai_panel",     Access::Admin),
-("POST", "/admin/dashboard/ai/ask",               "web::ai_ask",       Access::Admin),
+("GET",  "/admin/dashboard/explain",              "ai_web::explain_page", Access::Admin),
+("GET",  "/admin/dashboard/ai",                   "ai_web::ai_page",   Access::Admin),
+("GET",  "/admin/dashboard/ai/panel",             "ai_web::ai_panel",  Access::Admin),
+("POST", "/admin/dashboard/ai/ask",               "ai_web::ai_ask",    Access::Admin),
+("POST", "/admin/dashboard/ai/runs",              "ai_web::ai_runs",   Access::Admin),
+("GET",  "/admin/dashboard/ai/runs/{id}",         "ai_web::run_page",  Access::Admin),
+("GET",  "/admin/dashboard/ai/runs/{id}/stream",  "ai_web::run_stream", Access::Admin),
+("GET",  "/admin/dashboard/ai/history",           "ai_web::history_page", Access::Admin),
 '''
 
 [[wire]]
@@ -535,6 +605,21 @@ text = '''
 '''
 
 [[wire]]
+file = "templates/kernel/layout.html"
+anchor = "kernel head"
+text = '''
+{# The dev dashboard's Ask AI bar (development only; ai_web::bar decides which pages). #}
+{% if let Some(bar) = crate::kernel::dashboard::ai_web::bar(chrome.theme.return_to.as_str()) %}<link rel="stylesheet" href="{{ bar.css }}"><script src="{{ bar.js }}" defer></script>{% endif %}
+'''
+
+[[wire]]
+file = "templates/kernel/layout.html"
+anchor = "kernel main"
+text = '''
+{% if let Some(bar) = crate::kernel::dashboard::ai_web::bar(chrome.theme.return_to.as_str()) %}{% include "kernel/dashboard/_ai_bar.html" %}{% endif %}
+'''
+
+[[wire]]
 file = ".env.example"
 anchor = "env"
 text = '''
@@ -556,6 +641,14 @@ DASHBOARD_IN_PRODUCTION=false
 # DASHBOARD_AI_MODEL=claude-sonnet-5-5     # Anthropic default; claude-opus-5-5 (deeper), claude-haiku-5-5 (cheaper)
 # DASHBOARD_AI_BASE_URL=https://api.anthropic.com   # https, or http://localhost:11434/v1 (Ollama)
 # DASHBOARD_AI_IN_PRODUCTION=false         # also in the read-only /admin/dashboard, behind its gate
+# DASHBOARD_AI_PROACTIVE=false             # development: a watcher posts incident cards and investigates them
+# DASHBOARD_AI_TOOLS=all                   # or core: fewer tools, for small models
+# OpenRouter (OpenAI-compatible, tool calling): e.g. Meta's Muse models
+# DASHBOARD_AI_PROVIDER=openai-compatible
+# DASHBOARD_AI_BASE_URL=https://openrouter.ai/api/v1
+# DASHBOARD_AI_MODEL=meta/muse-spark-1.3   # or meta/muse-wonder (deeper), meta/muse-glimmer-30b (open weights)
+# DASHBOARD_AI_REFERER=http://localhost:3000   # optional: OpenRouter's HTTP-Referer
+# DASHBOARD_AI_TITLE=My app dev dashboard      # optional: OpenRouter's X-Title
 '''
 
 [[wire]]
@@ -570,6 +663,7 @@ file = "tests/app/security_test.rs"
 anchor = "router sources"
 text = '''
 "src/kernel/dashboard/web.rs",
+"src/kernel/dashboard/ai_web.rs",
 "src/kernel/dashboard/lab.rs",
 '''
 
@@ -597,6 +691,8 @@ text = '''
 "/dev/dashboard/schema",
 "/dev/dashboard/schema/migrations",
 "/dev/dashboard/ai?tab=overview",
+"/dev/dashboard/ai/history",
+"/dev/dashboard/explain",
 "/dev/dashboard/tests",
 "/dev/dashboard/github",
 "/dev/dashboard/lab",
@@ -628,4 +724,22 @@ anchor = "test mods"
 when = "auth-core"
 text = '''
 mod dev_dashboard_accounts_test;
+'''
+
+# With realtime: /dev/sockets' Ask AI context and the agent's app_snapshot tool read the hub
+# (ai_realtime.rs: counts and topic names, never people's names or frames).
+[[wire]]
+file = "src/kernel/dashboard/mod.rs"
+anchor = "dashboard mods"
+when = "realtime"
+text = '''
+pub mod ai_realtime;
+'''
+
+[[wire]]
+file = "src/kernel/dashboard/ai_context.rs"
+anchor = "dashboard ai sources"
+when = "realtime"
+text = '''
+Box::new(crate::kernel::dashboard::ai_realtime::Realtime),
 '''

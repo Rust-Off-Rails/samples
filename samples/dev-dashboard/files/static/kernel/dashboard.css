@@ -400,37 +400,29 @@ tr.current { background: var(--accent-bg); }
 .fx-err::before { content: "−"; color: var(--d-err); }
 .drift-list li { overflow-wrap: anywhere; }
 
-/* Ask AI */
-.ai-panel { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
-.ai-panel > summary { display: flex; align-items: center; gap: .45rem; padding: .45rem .8rem; cursor: pointer; font-weight: 600; font-size: .9rem; list-style: none; min-height: 32px; }
-.ai-panel > summary::-webkit-details-marker { display: none; }
-.ai-panel > summary .muted { font-weight: 400; }
-.ai-panel[open] > summary { border-bottom: 1px solid var(--border); }
-.ai-icon { width: 1rem; height: 1rem; fill: var(--accent); flex: none; }
-.ai-body { padding: .75rem 1rem; display: grid; gap: .6rem; }
-.ai-setup h3 { margin: 0 0 .25rem; font-size: .95rem; }
-.ai-setup p { margin: .35rem 0; font-size: .88rem; }
-.ai-setup pre, .ai-preview pre { font-size: .76rem; max-height: 18rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
-.ai-form { display: grid; gap: .5rem; }
-.ai-prompts { display: flex; flex-wrap: wrap; gap: .35rem; }
-.ai-prompts .chip { cursor: pointer; font: inherit; font-size: .8rem; white-space: normal; text-align: left; min-height: 28px; }
-.ai-prompts .chip:hover { border-color: var(--accent); }
-.ai-label { font-size: .82rem; color: var(--muted); }
-.ai-preview summary { cursor: pointer; font-size: .85rem; }
-.ai-preview summary .muted { font-size: .78rem; }
-.ai-actions { align-items: center; }
-.ai-busy { display: inline-flex; align-items: center; gap: .4rem; font-size: .85rem; color: var(--muted); }
-.ai-busy[hidden] { display: none; }
-.spinner { width: .9rem; height: .9rem; border-radius: 50%; border: 2px solid var(--d-grid); border-top-color: var(--accent); animation: spin .8s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
-.ai-result { display: grid; gap: .4rem; }
-.ai-text { font-size: .92rem; line-height: 1.55; overflow-wrap: anywhere; }
-.ai-text h3 { font-size: .98rem; margin: .6rem 0 .2rem; }
-.ai-text p { margin: .35rem 0; }
-.ai-text ul, .ai-text ol { margin: .35rem 0; padding-left: 1.3rem; }
-.ai-text pre { font-size: .8rem; overflow: auto; }
-.ai-text code { font-size: .85em; }
-.ai-page-answer .pad { padding: .75rem 1rem; }
+/* Ask AI's styles are in dashboard-ai.css (also loaded on other kernel pages, for the Ask AI bar). */
+.explain-link { font-size: .88rem; }
+.ov-ai .verdict { margin: 0 0 .35rem; font-size: 1rem; }
+.ov-ai .verdict .badge { font-size: .9rem; padding: .15rem .7rem; }
+.health-reasons { margin: 0 0 .6rem; padding-left: 1.2rem; font-size: .9rem; }
+.health .pad { display: grid; gap: .4rem; }
+.digest-list { list-style: none; margin: 0; padding: .6rem 1rem; display: grid; gap: .35rem; font-size: .9rem; }
+.digest-list li { display: flex; gap: .5rem; align-items: baseline; overflow-wrap: anywhere; }
+.digest-list .dot { flex: none; width: .55rem; height: .55rem; border-radius: 50%; background: var(--tone, var(--d-muted)); transform: translateY(-.05rem); }
+.digest-list .tone-ok { --tone: var(--d-ok); } .digest-list .tone-warn { --tone: var(--d-warn); } .digest-list .tone-err { --tone: var(--d-err); } .digest-list .tone-info { --tone: var(--d-info); } .digest-list .tone-muted { --tone: var(--d-muted); }
+.panel.health.tone-ok { border-top: 3px solid var(--d-ok); } .panel.health.tone-warn { border-top: 3px solid var(--d-warn); } .panel.health.tone-err { border-top: 3px solid var(--d-err); }
+.badge.tone-idle { --tone: var(--d-muted); }
+.explain-toc { display: flex; flex-wrap: wrap; gap: .4rem .9rem; font-size: .9rem; }
+.explain-parts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 1px; background: var(--border); }
+.explain-part { background: var(--panel); padding: .8rem 1rem; }
+.explain-part h3 { margin: 0 0 .3rem; font-size: 1rem; }
+.explain-part p { margin: .3rem 0; font-size: .9rem; }
+.explain-dl { margin: .4rem 0; display: grid; gap: .3rem; font-size: .86rem; }
+.explain-dl div { display: grid; grid-template-columns: 6.5rem 1fr; gap: .4rem; }
+.explain-dl dt { font-weight: 600; color: var(--muted); }
+.explain-dl dd { margin: 0; }
+.explain-links { font-size: .86rem; }
+@media (max-width: 480px) { .explain-dl div { grid-template-columns: 1fr; gap: 0; } }
 
 @media (max-width: 720px) {
   .help-wide { display: none; }
@@ -438,7 +430,4 @@ tr.current { background: var(--accent-bg); }
   .erd-export { margin-left: 0; }
   .erd-search input { width: 100%; }
   .erd-tools { width: 100%; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .spinner { animation: none; }
 }

@@ -28,6 +28,12 @@
   {% endfor %}
 </ol>
 {% endif %}
+{% if watching || !incidents.is_empty() %}
+<section class="panel" id="incidents" aria-labelledby="incidents-title">
+  <header><h2 id="incidents-title">Incidents</h2><span class="muted">the watcher (DASHBOARD_AI_PROACTIVE) posts one when a signal fires</span></header>
+  <div class="pad">{% if incidents.is_empty() %}<p class="empty">Watching: latency spikes, error bursts, new N+1s, memory growth, job failures, schema drift and failing tests. Nothing has fired.</p>{% else %}{% include "kernel/dashboard/_incidents.html" %}{% endif %}</div>
+</section>
+{% endif %}
 <section class="panel" id="csp" aria-labelledby="csp-title">
   <header><h2 id="csp-title">CSP violations</h2><span class="muted">reported by the browser to <code>/dev/csp-reports</code></span></header>
   {% if csp.is_empty() %}<p class="empty">None reported. In development the CSP carries <code>report-uri /dev/csp-reports</code>, so an inline script or a third-party file that the policy blocks shows up here.</p>{% else %}

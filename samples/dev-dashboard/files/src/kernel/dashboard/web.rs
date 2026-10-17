@@ -28,8 +28,7 @@ use super::charts::{self, ChartView, Heatmap, SeriesSpec, Spark, Unit, Window};
 use super::series::{Range, Sample};
 use super::trace::{LogLine, Trace, WaterRow};
 use super::{
-    HUB, ai, ai_context, github, http, insights, lab, lock, panels, route_explorer as rx, schema,
-    sql, testruns,
+    HUB, ai, github, http, insights, lab, lock, panels, route_explorer as rx, schema, sql, testruns,
 };
 use crate::error::AppError;
 use crate::kernel::cookie;
@@ -97,11 +96,11 @@ pub struct Mode {
     pub base: &'static str,
 }
 
-const DEV: Mode = Mode {
+pub(super) const DEV: Mode = Mode {
     ro: false,
     base: "/dev/dashboard",
 };
-const ADMIN: Mode = Mode {
+pub(super) const ADMIN: Mode = Mode {
     ro: true,
     base: "/admin/dashboard",
 };
@@ -150,7 +149,7 @@ impl Dash {
     }
 }
 
-fn dash(mode: Mode, page: &str, live: Option<String>, refresh: u64) -> Dash {
+pub(super) fn dash(mode: Mode, page: &str, live: Option<String>, refresh: u64) -> Dash {
     let all: &[(&str, &str, bool)] = &[
         ("Overview", "", true),
         ("Insights", "/insights", false),
@@ -186,7 +185,7 @@ fn dash(mode: Mode, page: &str, live: Option<String>, refresh: u64) -> Dash {
     }
 }
 
-fn chrome(
+pub(super) fn chrome(
     state: &AppState,
     title: &str,
     tab: &str,
@@ -202,7 +201,9 @@ fn chrome(
         theme,
     )
     .stylesheet(state.assets.path("kernel/dashboard.css"))
+    .stylesheet(state.assets.path("kernel/dashboard-ai.css"))
     .script(state.assets.path("kernel/dashboard.js"))
+    .script(state.assets.path("kernel/dashboard-ai.js"))
 }
 
 /// The app's root (where `storage/`, `tests/` and `product/` are).
@@ -210,7 +211,7 @@ fn root() -> PathBuf {
     PathBuf::from(".")
 }
 
-fn back(to: &str, flash: Flash) -> Response {
+pub(super) fn back(to: &str, flash: Flash) -> Response {
     (flash, Redirect::to(to)).into_response()
 }
 
@@ -271,11 +272,10 @@ fn read_routes(r: Router<AppState>, base: &'static str) -> Router<AppState> {
         .route(&p("/sql/{id}"), get(sql_show))
         .route(&p("/config"), get(config_page))
         .route(&p("/stream"), get(stream))
+        .route(&p("/explain"), get(super::ai_web::explain_page))
         // Ask AI: each handler answers 404 unless `ai::allowed` (development, or production with
         // DASHBOARD_AI_IN_PRODUCTION=true behind the admin gate).
-        .route(&p("/ai"), get(ai_page))
-        .route(&p("/ai/panel"), get(ai_panel))
-        .route(&p("/ai/ask"), post(ai_ask))
+        .merge(super::ai_web::routes(base))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -558,6 +558,9 @@ struct OverviewPage {
     findings: Vec<FindingView>,
     finding_total: usize,
     empty: bool,
+    health: super::ai_web::HealthView,
+    digest: super::ai_watch::Digest,
+    incidents: Vec<super::ai_web::IncidentView>,
 }
 
 pub struct NPlusOneRow {
@@ -612,8 +615,8 @@ async fn overview(
             .take(8)
             .collect::<Vec<_>>(),
     );
-    let (findings, finding_total) = if mode.ro {
-        (Vec::new(), 0)
+    let (findings, finding_total, high, medium) = if mode.ro {
+        (Vec::new(), 0, 0, 0)
     } else {
         let dismissed = dismissed(&headers);
         let all: Vec<FindingView> = all_findings(&state, &dismissed)
@@ -622,10 +625,17 @@ async fn overview(
             .filter(|f| !f.dismissed)
             .collect();
         let n = all.len();
-        (all.into_iter().take(3).collect(), n)
+        let sev = |s: &str| all.iter().filter(|f| f.severity == s).count();
+        let (high, medium) = (sev("high"), sev("medium"));
+        (all.into_iter().take(3).collect(), n, high, medium)
     };
     let empty = lock(&HUB.http).is_empty();
-    Ok(ui::page(OverviewPage {
+    let cards = cards(mode);
+    let health = super::ai_web::health_view(&state, mode, &cards, high, medium).await;
+    // "Since you were away": this browser's last visit (a cookie), then now.
+    let (seen, seen_cookie) = super::ai_web::seen(&headers, state.config.is_production());
+    let digest = super::ai_watch::digest(seen, Utc::now().timestamp());
+    let mut res = ui::page(OverviewPage {
         chrome: chrome(&state, "Dashboard", "dashboard", flash, theme),
         d: dash(
             mode,
@@ -634,7 +644,7 @@ async fn overview(
             1,
         )
         .ai(&state.config, ai::Tab::Overview, None),
-        cards: cards(mode),
+        cards,
         panels: if mode.ro {
             Vec::new()
         } else {
@@ -647,7 +657,16 @@ async fn overview(
         findings,
         finding_total,
         empty,
-    }))
+        health,
+        digest,
+        incidents: if mode.ro {
+            Vec::new()
+        } else {
+            super::ai_web::incident_views(3)
+        },
+    });
+    res.headers_mut().append(header::SET_COOKIE, seen_cookie);
+    Ok(res)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1797,7 +1816,7 @@ pub fn finding_id(key: &str) -> String {
     format!("{:08x}", sql::fingerprint_id(key) as u32)
 }
 
-fn dismissed(headers: &HeaderMap) -> HashSet<String> {
+pub(super) fn dismissed(headers: &HeaderMap) -> HashSet<String> {
     cookie::get(headers, DISMISSED_COOKIE)
         .map(|v| {
             v.split('.')
@@ -1827,7 +1846,10 @@ fn finding_view(f: insights::Finding, dismissed: &HashSet<String>) -> FindingVie
 }
 
 /// Every finding (the app doctor's and the route detectors'), highest severity first.
-async fn all_findings(state: &AppState, dismissed: &HashSet<String>) -> Vec<FindingView> {
+pub(super) async fn all_findings(
+    state: &AppState,
+    dismissed: &HashSet<String>,
+) -> Vec<FindingView> {
     let mut all: Vec<insights::Finding> = insights::findings(state).await;
     all.extend(route_findings(state).await);
     all.sort_by(|a, b| b.severity.cmp(&a.severity).then(b.score.cmp(&a.score)));
@@ -1854,6 +1876,8 @@ struct InsightsPage {
     hidden: usize,
     counts: (usize, usize, usize),
     csp: Vec<CspView>,
+    incidents: Vec<super::ai_web::IncidentView>,
+    watching: bool,
 }
 
 async fn insights_page(
@@ -1891,6 +1915,8 @@ async fn insights_page(
         hidden,
         counts,
         csp,
+        incidents: super::ai_web::incident_views(super::ai_watch::INCIDENTS),
+        watching: super::ai_watch::enabled(&state),
     })
 }
 
@@ -2740,338 +2766,6 @@ async fn migrations_page(
 }
 
 // ---------------------------------------------------------------------------------------------
-// Ask AI (ai.rs, ai_context.rs)
-// ---------------------------------------------------------------------------------------------
-
-#[derive(Debug, Default, Deserialize)]
-struct AiQuery {
-    tab: Option<String>,
-    item: Option<String>,
-}
-
-/// The panel: how to enable it, or the prepared context's preview, the prompts and the form.
-pub struct AiPanel {
-    pub configured: bool,
-    pub base: &'static str,
-    pub tab: &'static str,
-    pub tab_label: &'static str,
-    pub item: String,
-    pub provider: &'static str,
-    pub model: String,
-    pub endpoint: String,
-    pub prepared: String,
-    pub headers: Vec<String>,
-    /// The exact JSON body, with the question shown as a placeholder until it is typed.
-    pub preview: String,
-    pub chars: usize,
-    pub tokens: usize,
-    pub truncated: bool,
-    pub suggestions: &'static [&'static str],
-    pub question: String,
-    pub left: String,
-    pub error: Option<String>,
-}
-
-pub struct AiAnswer {
-    pub blocks: Vec<ai::Block>,
-    pub note: Option<String>,
-    pub error: Option<String>,
-    pub usage: String,
-    /// The body that was sent, for the "What was sent" disclosure.
-    pub sent: String,
-}
-
-#[derive(Template)]
-#[template(path = "kernel/dashboard/_ai_panel.html")]
-struct AiPanelFragment {
-    p: AiPanel,
-}
-
-#[derive(Template)]
-#[template(path = "kernel/dashboard/_ai_answer.html")]
-struct AiAnswerFragment {
-    a: AiAnswer,
-}
-
-#[derive(Template)]
-#[template(path = "kernel/dashboard/ai.html")]
-struct AiPage {
-    chrome: Chrome,
-    d: Dash,
-    p: AiPanel,
-    a: Option<AiAnswer>,
-}
-
-/// "Anthropic · claude-sonnet-5-5 · https://api.anthropic.com · key: set" for Config.
-// SECURITY: the key shows as "set" or "not set", never its value (test: the_ai_key_never_reaches_logs_traces_pages_or_recorded_requests)
-fn ai_setting(ai: &crate::config::DashboardAi) -> String {
-    if ai.provider.is_none() {
-        return "off (DASHBOARD_AI_PROVIDER not set)".into();
-    }
-    format!(
-        "{} · {} · {} · key: {}{}",
-        provider_label(ai),
-        ai.model,
-        ai.base_url,
-        if ai.api_key.is_some() {
-            "set"
-        } else {
-            "not set"
-        },
-        if ai.in_production {
-            " · also in production"
-        } else {
-            ""
-        }
-    )
-}
-
-/// A question placeholder in the preview; the script fills in what is typed.
-const QUESTION_SLOT: &str = "{your question}";
-
-fn provider_label(ai: &crate::config::DashboardAi) -> &'static str {
-    match ai.provider {
-        Some(crate::config::AiProvider::Anthropic) => "Anthropic",
-        Some(crate::config::AiProvider::OpenAiCompatible) => "OpenAI-compatible",
-        None => "not configured",
-    }
-}
-
-fn tab_and_item(
-    q_tab: Option<&str>,
-    q_item: Option<&str>,
-) -> Result<(ai::Tab, Option<String>), AppError> {
-    let tab = q_tab.and_then(ai::Tab::parse).ok_or(AppError::NotFound)?;
-    let item = q_item.map(str::trim).filter(|i| !i.is_empty());
-    match item {
-        Some(i) if !tab.valid_item(i) => Err(AppError::NotFound),
-        Some(i) => Ok((tab, Some(i.to_owned()))),
-        None => Ok((tab, None)),
-    }
-}
-
-/// Builds the context for `tab` and stores it for the Ask button; the panel shows its preview.
-async fn ai_panel_for(
-    state: &AppState,
-    mode: Mode,
-    tab: ai::Tab,
-    item: Option<String>,
-    question: String,
-    error: Option<String>,
-) -> AiPanel {
-    let cfg = &state.config.dashboard.ai;
-    let mut p = AiPanel {
-        configured: cfg.provider.is_some(),
-        base: mode.base,
-        tab: tab.key(),
-        tab_label: tab.label(),
-        item: item.clone().unwrap_or_default(),
-        provider: provider_label(cfg),
-        model: cfg.model.clone(),
-        endpoint: ai::endpoint(cfg),
-        prepared: String::new(),
-        headers: ai::header_lines(cfg),
-        preview: String::new(),
-        chars: 0,
-        tokens: 0,
-        truncated: false,
-        suggestions: tab.suggestions(item.is_some()),
-        question,
-        left: lock(&ai::BUDGET).left(ai::today()),
-        error,
-    };
-    if !p.configured {
-        return p;
-    }
-    let context = match http::quietly(ai_context::build(state, mode.ro, tab, item.as_deref())).await
-    {
-        Ok(c) => c,
-        Err(e) => {
-            p.error = Some(e);
-            return p;
-        }
-    };
-    let prepared = ai::store(tab, item, context);
-    let body = ai::body(
-        cfg,
-        &prepared.system,
-        &ai::user_message(&prepared, QUESTION_SLOT),
-    );
-    p.preview = serde_json::to_string_pretty(&body).unwrap_or_default();
-    p.chars = p.preview.chars().count();
-    // WHY: an estimate (4 characters a token) for the preview; the provider's count is shown
-    // after the answer.
-    p.tokens = p.chars / 4;
-    p.truncated = prepared.truncated;
-    p.prepared = prepared.id;
-    p
-}
-
-/// `GET {base}/ai?tab=…&item=…`: the assistant on a page of its own (also the no-JS path and
-/// the target of every "Ask about this" link).
-async fn ai_page(
-    State(state): State<AppState>,
-    Extension(mode): Extension<Mode>,
-    Query(q): Query<AiQuery>,
-    theme: ThemeSwitch,
-    flash: Option<Extension<RequestFlash>>,
-) -> Result<Response, AppError> {
-    if !ai::allowed(&state.config, mode.ro) {
-        return Err(AppError::NotFound);
-    }
-    let (tab, item) = tab_and_item(q.tab.as_deref().or(Some("overview")), q.item.as_deref())?;
-    if mode.ro && !tab.in_read_only() {
-        return Err(AppError::NotFound);
-    }
-    let p = ai_panel_for(&state, mode, tab, item, String::new(), None).await;
-    Ok(ui::page(AiPage {
-        chrome: chrome(&state, "Ask AI", "dashboard", flash, theme),
-        d: dash(mode, "/ai", None, 0),
-        p,
-        a: None,
-    }))
-}
-
-/// `GET {base}/ai/panel?tab=…`: the panel as a fragment, loaded when the page's "Ask AI" opens.
-async fn ai_panel(
-    State(state): State<AppState>,
-    Extension(mode): Extension<Mode>,
-    Query(q): Query<AiQuery>,
-) -> Result<Response, AppError> {
-    if !ai::allowed(&state.config, mode.ro) {
-        return Err(AppError::NotFound);
-    }
-    let (tab, item) = tab_and_item(q.tab.as_deref(), q.item.as_deref())?;
-    if mode.ro && !tab.in_read_only() {
-        return Err(AppError::NotFound);
-    }
-    let p = ai_panel_for(&state, mode, tab, item, String::new(), None).await;
-    Ok(ui::page(AiPanelFragment { p }))
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct AskForm {
-    #[serde(default)]
-    prepared: String,
-    #[serde(default)]
-    tab: String,
-    #[serde(default)]
-    item: String,
-    #[serde(default)]
-    question: String,
-}
-
-/// `POST {base}/ai/ask`: sends the prepared context and the question. With the script it answers
-/// a fragment (`x-dashboard-fragment: 1`); without it, the whole page.
-async fn ai_ask(
-    State(state): State<AppState>,
-    Extension(mode): Extension<Mode>,
-    headers: HeaderMap,
-    theme: ThemeSwitch,
-    Form(f): Form<AskForm>,
-) -> Result<Response, AppError> {
-    if !ai::allowed(&state.config, mode.ro) {
-        return Err(AppError::NotFound);
-    }
-    let (tab, item) = tab_and_item(Some(&f.tab), Some(&f.item))?;
-    if mode.ro && !tab.in_read_only() {
-        return Err(AppError::NotFound);
-    }
-    let fragment = headers.contains_key("x-dashboard-fragment");
-    let question: String = f
-        .question
-        .trim()
-        .chars()
-        .take(ai::MAX_QUESTION_CHARS)
-        .collect();
-    let answer = ask(state.clone(), &f.prepared, tab, item.as_deref(), &question).await;
-    if fragment {
-        return Ok(ui::page(AiAnswerFragment { a: answer }));
-    }
-    let p = ai_panel_for(&state, mode, tab, item, question, None).await;
-    Ok(ui::page(AiPage {
-        chrome: chrome(&state, "Ask AI", "dashboard", None, theme),
-        d: dash(mode, "/ai", None, 0),
-        p,
-        a: Some(answer),
-    }))
-}
-
-async fn ask(
-    state: AppState,
-    prepared_id: &str,
-    tab: ai::Tab,
-    item: Option<&str>,
-    question: &str,
-) -> AiAnswer {
-    let fail = |e: String| AiAnswer {
-        blocks: Vec::new(),
-        note: None,
-        error: Some(e),
-        usage: String::new(),
-        sent: String::new(),
-    };
-    let cfg = &state.config.dashboard.ai;
-    if cfg.provider.is_none() {
-        return fail(ai::AiError::NotConfigured.message());
-    }
-    if question.is_empty() {
-        return fail("Type a question first (or pick a suggested one).".into());
-    }
-    // SECURITY: only a context the developer was shown goes out: the prepared id must exist and
-    // match the page; otherwise nothing is sent (test: only_the_previewed_context_is_sent)
-    let Some(p) = ai::prepared(prepared_id).filter(|p| p.tab == tab && p.item.as_deref() == item)
-    else {
-        return fail(
-            "The preview expired or belongs to another page. Review the refreshed preview, then ask again."
-                .into(),
-        );
-    };
-    if let Err(e) = lock(&ai::BUDGET).reserve(ai::today(), std::time::Instant::now()) {
-        return fail(e.message());
-    }
-    let body = ai::body(cfg, &p.system, &ai::user_message(&p, question));
-    let started = std::time::Instant::now();
-    let result = ai::send(cfg, &body, ai::TIMEOUT).await;
-    let sent = serde_json::to_string_pretty(&body).unwrap_or_default();
-    match result {
-        Ok(a) => {
-            let tokens = a.input_tokens + a.output_tokens;
-            lock(&ai::BUDGET).spend(ai::today(), tokens);
-            tracing::info!(
-                provider = provider_label(cfg),
-                model = %cfg.model,
-                tab = tab.key(),
-                input_tokens = a.input_tokens,
-                output_tokens = a.output_tokens,
-                ms = started.elapsed().as_millis() as u64,
-                "dashboard: the AI assistant answered"
-            );
-            AiAnswer {
-                blocks: ai::render(&a.text),
-                note: a.note,
-                error: None,
-                usage: format!(
-                    "{} in, {} out · {} · {}",
-                    ui::thousands(a.input_tokens),
-                    ui::thousands(a.output_tokens),
-                    micros(started.elapsed().as_micros() as u64),
-                    lock(&ai::BUDGET).left(ai::today())
-                ),
-                sent,
-            }
-        }
-        Err(e) => {
-            tracing::warn!(provider = provider_label(cfg), error = ?e, "dashboard: the AI assistant failed");
-            AiAnswer {
-                sent,
-                ..fail(e.message())
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------------------------
 
@@ -3223,7 +2917,10 @@ async fn config_page(
             crate::controllers::dev::redact_db(&c.database_url),
         ),
         ("DATABASE_POOL".to_owned(), c.database_pool.to_string()),
-        ("Ask AI".to_owned(), ai_setting(&c.dashboard.ai)),
+        (
+            "Ask AI".to_owned(),
+            super::ai_web::ai_setting(&c.dashboard.ai),
+        ),
         ("APP_URL".to_owned(), c.app_url.clone()),
         ("PORT".to_owned(), c.port.to_string()),
         (
