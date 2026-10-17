@@ -699,13 +699,7 @@ pub fn save_in(dir: &Path, rec: &Record) {
     if !valid_id(&rec.id) || std::fs::create_dir_all(dir).is_err() {
         return;
     }
-    let mut r = rec.clone();
-    for s in &mut r.steps {
-        s.result = crate::kernel::ui::truncate(&s.result, HISTORY_RESULT_CHARS);
-    }
-    r.answer = redact::text(&r.answer);
-    r.question = redact::text(&r.question);
-    r.sent = crate::kernel::ui::truncate(&r.sent, 64 * 1024);
+    let r = stored(rec);
     let name = format!("{}-{}.json", r.started.timestamp(), r.id);
     if let Ok(json) = serde_json::to_vec_pretty(&r) {
         let tmp = dir.join(format!(".{name}.tmp"));
@@ -718,6 +712,18 @@ pub fn save_in(dir: &Path, rec: &Record) {
         let oldest = files.remove(0);
         let _ = std::fs::remove_file(dir.join(oldest));
     }
+}
+
+/// A run as the history keeps it: results capped, question and answer redacted.
+fn stored(rec: &Record) -> Record {
+    let mut r = rec.clone();
+    for s in &mut r.steps {
+        s.result = crate::kernel::ui::truncate(&s.result, HISTORY_RESULT_CHARS);
+    }
+    r.answer = redact::text(&r.answer);
+    r.question = redact::text(&r.question);
+    r.sent = crate::kernel::ui::truncate(&r.sent, 64 * 1024);
+    r
 }
 
 /// History file names, oldest first.
@@ -739,9 +745,22 @@ fn list_files(dir: &Path) -> Vec<String> {
     names
 }
 
-/// Every stored run, newest first.
+/// Every stored run plus the live ones not yet written, newest first, at most `MAX_HISTORY`.
+// WHY: a run is written when it finishes, so without the live ones a question asked a moment
+// ago is missing from the history page until then (test: run_history_is_capped_redacted_and_reopened)
 pub fn history() -> Vec<Record> {
-    history_in(&history_dir())
+    let mut all = history_in(&history_dir());
+    let runs: Vec<Arc<Run>> = lock(&RUNS).iter().cloned().collect();
+    let live: Vec<Record> = runs
+        .iter()
+        .map(|r| r.record())
+        .filter(|r| all.iter().all(|h| h.id != r.id))
+        .map(|r| stored(&r))
+        .collect();
+    all.extend(live);
+    all.sort_by_key(|r| std::cmp::Reverse(r.started));
+    all.truncate(MAX_HISTORY);
+    all
 }
 
 pub fn history_in(dir: &Path) -> Vec<Record> {
