@@ -31,10 +31,10 @@ else
   else
     actual=$(shasum -a 256 "$work/rustoffrails.tar.gz" | awk '{ print $1 }')
   fi
-  [ -n "$expected" ] && [ "$expected" = "$actual" ] || {
+  if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
     echo "vendor-framework: checksum mismatch for v$version (expected $expected, got $actual)" >&2
     exit 1
-  }
+  fi
   tar -xzf "$work/rustoffrails.tar.gz" -C "$work"
   src=$work/rustoffrails
 fi

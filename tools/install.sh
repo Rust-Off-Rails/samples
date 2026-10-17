@@ -195,7 +195,10 @@ check_wire() {
 # Check everything before changing anything.
 problems=0
 for s in $order; do
-  files=$(cd "$samples/$s/files" 2>/dev/null && find . -type f | sed 's|^\./||' | sort || true)
+  files=""
+  if [ -d "$samples/$s/files" ]; then
+    files=$(cd "$samples/$s/files" && find . -type f | sed 's|^\./||' | sort)
+  fi
   for f in $files; do
     if [ -e "$app/$f" ] && [ "$force" = 0 ]; then
       if rename "$samples/$s/files/$f" | cmp -s - "$app/$f"; then
