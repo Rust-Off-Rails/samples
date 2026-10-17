@@ -226,3 +226,33 @@ async fn production_and_test_answer_any_host() {
             .assert_ok();
     }
 }
+
+/// ZAP's "Suspicious Comments" rule (10027) reads these words in served script comments as SQL or
+/// debug leftovers. Public pages load the top-level `static/*.js`, so their comments avoid them
+/// (security.md, Gotchas).
+#[test]
+fn public_scripts_have_no_comment_words_zap_flags() {
+    const WORDS: &str = "todo fixme bug bugs xxx query db admin administrator user username select where from later debug";
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir("static").expect("static/") {
+        let path = entry.expect("a static entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("js") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).expect("a readable script");
+        for (n, line) in source.lines().enumerate() {
+            let trimmed = line.trim_start();
+            let comment = match line.find("//") {
+                Some(at) => &line[at..],
+                None if trimmed.starts_with("/*") || trimmed.starts_with('*') => trimmed,
+                None => continue,
+            };
+            let lower = comment.to_ascii_lowercase();
+            let words = lower.split(|c: char| !c.is_ascii_alphanumeric() && c != '_');
+            for word in words.filter(|w| WORDS.split(' ').any(|z| z == *w)) {
+                found.push(format!("{}:{}: {word}", path.display(), n + 1));
+            }
+        }
+    }
+    assert!(found.is_empty(), "reword these comments: {found:?}");
+}

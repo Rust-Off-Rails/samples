@@ -23,7 +23,7 @@ document.addEventListener("submit", (e) => {
   if (message && !window.confirm(message)) e.preventDefault();
 });
 
-// A page restored from the back/forward cache is reloaded, so it never shows stale data.
+// A page the back/forward cache restores is reloaded, so it never shows stale data.
 window.addEventListener("pageshow", (event) => {
   if (event.persisted) window.location.reload();
 });
