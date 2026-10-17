@@ -2358,12 +2358,35 @@ async fn an_agent_run_stops_at_its_budget_and_says_so() {
     let page = investigate(&app, "overview", "Loop forever").await;
     assert!(page.contains("Stopped: steps"), "{page}");
     let calls = seen.lock().unwrap().clone();
-    assert_eq!(calls.len(), 3);
+    // MAX_STEPS calls, then one that may only answer (its calls answered "not run").
+    assert_eq!(calls.len(), 4);
     assert_eq!(calls[2].2["tool_choice"], json!({ "type": "none" }));
     assert!(
         calls[2].2["tools"].is_array(),
         "tools stay declared on the last call"
     );
+    assert_eq!(calls[3].2["tool_choice"], json!({ "type": "none" }));
+    assert!(
+        calls[3]
+            .2
+            .to_string()
+            .contains("Answer now from what you have")
+    );
+    // A model that answers on that extra call: the run ends with its answer.
+    let (base, _) = scripted_provider(
+        vec![
+            a_calls("", &[("t1", "get_overview", json!({}))]),
+            a_calls("", &[("t2", "get_overview", json!({}))]),
+            a_calls("", &[("t3", "get_overview", json!({}))]),
+            a_text("Bottom line: fine [trace:1]."),
+        ],
+        Duration::ZERO,
+    )
+    .await;
+    let app = ai_app(ai_config(AiProvider::Anthropic, &base)).await;
+    let page = investigate(&app, "overview", "Loop forever").await;
+    assert!(page.contains("Bottom line: fine"), "{page}");
+    assert!(page.contains("Answered in 4 calls"), "{page}");
 
     *lock(&ai_agent::LIMITS) = ai_agent::Limits {
         run_tokens: 400,
@@ -2878,6 +2901,17 @@ async fn a_run_stream_is_bound_to_its_browser() {
                 .unwrap()
         }
     };
+    // While it runs, its page belongs to its browser too.
+    assert_eq!(
+        get(
+            format!("/dev/dashboard/ai/runs/{id}"),
+            Some(ai::random_id()),
+            None
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
     let res = get(stream.clone(), Some(owner.clone()), None).await;
     assert_eq!(res.status(), StatusCode::OK);
     let mut body = res.into_body();
@@ -2897,10 +2931,6 @@ async fn a_run_stream_is_bound_to_its_browser() {
     for (path, cookie) in [
         (stream.clone(), None),
         (stream.clone(), Some(ai::random_id())),
-        (
-            format!("/dev/dashboard/ai/runs/{}", id),
-            Some(ai::random_id()),
-        ),
         (
             format!("/dev/dashboard/ai/runs/{}/stream", ai::random_id()),
             Some(owner.clone()),
@@ -2922,6 +2952,16 @@ async fn a_run_stream_is_bound_to_its_browser() {
             .status(),
         StatusCode::OK
     );
+    // Finished, it is in the history every dashboard viewer sees: its permalink opens anywhere
+    // (another browser, a fresh window), like a run read back from disk.
+    for cookie in [None, Some(ai::random_id())] {
+        assert_eq!(
+            get(format!("/dev/dashboard/ai/runs/{id}"), cookie, None)
+                .await
+                .status(),
+            StatusCode::OK
+        );
+    }
 }
 
 /// The history keeps the newest MAX_HISTORY runs, results capped and answers redacted, lists
@@ -4235,4 +4275,140 @@ async fn a_cut_answer_continues_in_the_same_run() {
         .post_form(&format!("/dev/dashboard/ai/runs/{id}/continue"), &[])
         .await;
     assert_eq!(res.status, StatusCode::NOT_FOUND);
+}
+
+/// Citations are read the way models write them: a capital, a space after the colon, a `#`,
+/// backticks, several in one bracket, a lowercase method, a concrete path for its route, a file
+/// with `L` before the line. Still never a link outside the dashboard (see
+/// `citations_link_only_to_validated_dashboard_pages`).
+#[test]
+fn citations_are_read_the_way_models_write_them() {
+    use ai::{Block, Inline};
+    let now = 86_400 * 20_000 + 12 * 3600;
+    let cites = |md: &str| -> Vec<(String, Option<String>)> {
+        ai::render_in(md, "/dev/dashboard", now)
+            .into_iter()
+            .flat_map(|b| match b {
+                Block::Para(xs) => xs,
+                _ => Vec::new(),
+            })
+            .filter_map(|x| match x {
+                Inline::Cite(l, h, _) => Some((l, h)),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(
+        cites("[Trace: 580] and [trace #12]."),
+        vec![
+            ("trace 580".into(), Some("/dev/dashboard/traces/580".into())),
+            ("trace 12".into(), Some("/dev/dashboard/traces/12".into()))
+        ]
+    );
+    assert_eq!(cites("`[sql:8514e40e7c1027b7]`").len(), 1);
+    assert_eq!(cites("[trace:1, trace:2]").len(), 2);
+    assert_eq!(
+        cites("[route:get /dev/dashboard]")[0].1.as_deref(),
+        Some("/dev/dashboard/traces?route=%2Fdev%2Fdashboard")
+    );
+    assert_eq!(
+        cites("[route:GET /dev/dashboard/traces/42]")[0].0,
+        "GET /dev/dashboard/traces/{id}"
+    );
+    assert_eq!(
+        cites("[file:src/routes.rs:L12]"),
+        vec![("src/routes.rs:12".into(), None)]
+    );
+    assert!(cites("[file a bug] and [sql Server] and [route:GET /etc]").is_empty());
+}
+
+/// What the model writes before a tool call shows in its step rendered like the answer
+/// (headings, citations as chips), never as raw Markdown.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_steps_note_renders_like_the_answer() {
+    let (base, _) = scripted_provider(
+        vec![
+            a_calls(
+                "## What the signal is\nA slow request [trace:1] on [route:GET /dev/dashboard].",
+                &[("t1", "get_overview", json!({}))],
+            ),
+            a_text("Done."),
+        ],
+        Duration::ZERO,
+    )
+    .await;
+    let app = ai_app(ai_config(AiProvider::Anthropic, &base)).await;
+    let page = investigate(&app, "overview", "Why?").await;
+    assert!(page.contains("<h3>What the signal is</h3>"), "{page}");
+    assert!(page.contains("class=\"cite cite-trace\""), "{page}");
+    assert!(!page.contains("## What"), "{page}");
+}
+
+/// A proposed page reads as what it is ("Open the N+1 list"), not as a path.
+#[test]
+fn proposed_pages_have_human_labels() {
+    for (path, label) in [
+        ("/dev/dashboard/sql#n-plus-one", "Open the N+1 list"),
+        ("/dev/dashboard/sql/8514e40e7c1027b7", "Open the query"),
+        ("/dev/dashboard/traces/42", "Open trace 42"),
+        (
+            "/dev/dashboard/traces?route=%2Fx",
+            "Open this route's traces",
+        ),
+        ("/dev/dashboard/schema/tables/users", "Open the users table"),
+        ("/dev/dashboard/logs?level=error", "Open the error log"),
+        ("/dev/dashboard/insights", "Open Insights"),
+        ("/dev/dashboard", "Open the overview"),
+        ("/dev/mailbox/12", "Open email 12"),
+        ("/admin/jobs/7", "Open job 7"),
+    ] {
+        assert_eq!(ai_tools::page_label(path), label, "{path}");
+    }
+}
+
+/// A provider's error says what the provider said, a gateway's upstream error included, with
+/// a hint, and nothing key-like.
+#[test]
+fn provider_errors_say_what_the_provider_said() {
+    let openrouter = json!({ "error": {
+        "message": "Provider returned error", "code": 400,
+        "metadata": { "provider_name": "DeepSeek",
+            "raw": "{\"error\":{\"message\":\"This model does not support tool_choice\"}}" } } });
+    let m = ai::provider_message(&openrouter);
+    assert!(
+        m.contains("Provider returned error") && m.contains("DeepSeek"),
+        "{m}"
+    );
+    assert!(m.contains("does not support tool_choice"), "{m}");
+    let e = ai::AiError::Provider(400, m).message();
+    assert!(e.contains("Hint:") && e.contains("tool"), "{e}");
+    let e = ai::AiError::Provider(404, "No endpoints found for x/y".into()).message();
+    assert!(e.contains("DASHBOARD_AI_MODEL"), "{e}");
+}
+
+/// Incident cards update live on Insights (and the overview): the stream sends them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn incident_cards_update_over_the_live_stream() {
+    let app = dev_app().await;
+    lab::seed(app.db(), 25).await.unwrap();
+    app.get("/dev/lab/orders/n-plus-one").await;
+    assert!(!ai_watch::tick(&app.state).await.is_empty());
+    let page = app.get("/dev/dashboard/insights").await;
+    page.assert_contains("data-stream=\"/dev/dashboard/stream?view=insights\"")
+        .assert_contains("data-live=\"incidents\"");
+    let router = offrails_host::routes::router(app.state.clone()).unwrap();
+    let res = router
+        .oneshot(
+            Request::get("/dev/dashboard/stream?view=insights")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let mut body = res.into_body();
+    let ev = next_event(&mut body, "event: incidents", Duration::from_secs(10)).await;
+    assert!(ev.contains("New N+1"), "{ev}");
+    app.get("/dev/dashboard")
+        .await
+        .assert_contains("data-live=\"incidents\"");
 }

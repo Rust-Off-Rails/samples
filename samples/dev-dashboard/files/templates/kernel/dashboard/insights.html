@@ -31,7 +31,7 @@
 {% if watching || !incidents.is_empty() %}
 <section class="panel" id="incidents" aria-labelledby="incidents-title">
   <header><h2 id="incidents-title">Incidents</h2><span class="muted">the watcher (DASHBOARD_AI_PROACTIVE) posts one when a signal fires</span></header>
-  <div class="pad">{% if incidents.is_empty() %}<p class="empty">Watching: latency spikes, error bursts, new N+1s, memory growth, job failures, schema drift and failing tests. Nothing has fired.</p>{% else %}{% include "kernel/dashboard/_incidents.html" %}{% endif %}</div>
+  <div class="pad" data-live="incidents">{% include "kernel/dashboard/_incidents_box.html" %}</div>
 </section>
 {% endif %}
 <section class="panel" id="csp" aria-labelledby="csp-title">

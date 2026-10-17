@@ -452,7 +452,10 @@ tr.current { background: var(--accent-bg); }
 .cc-body h2 { margin: 0 0 .5rem; font-size: 1rem; display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem .6rem; }
 .cc-tag { font-size: .75rem; font-weight: 400; color: var(--muted); }
 .cc-top { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); align-items: start; }
-.cc-brief, .cc-ai, .cc-ask, .cc-graphs, .cc-guide { min-width: 0; }
+.cc-brief, .cc-ai, .cc-ask, .cc-graphs, .cc-guide, .cc-main { min-width: 0; }
+.cc-main { display: grid; gap: 1rem; }
+.cc-run:empty { display: none; }
+.cc-run > .ai-run { padding: .9rem 1rem; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
 .cc-ai, .cc-ask { padding: .8rem .9rem; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); display: grid; gap: .55rem; align-content: start; }
 .cc-ai h2, .cc-ask h2 { margin: 0; }
 .cc-bullets { list-style: none; margin: 0; padding: 0; display: grid; gap: .45rem; }

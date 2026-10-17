@@ -552,6 +552,21 @@ struct CardsFragment {
     cards: Vec<Card>,
 }
 
+/// The overview's incident cards, live (an investigation's status and story as they arrive).
+#[derive(Template)]
+#[template(path = "kernel/dashboard/_incidents_panel.html")]
+struct IncidentsPanel {
+    incidents: Vec<super::ai_web::IncidentView>,
+    base: &'static str,
+}
+
+/// The insights page's incident cards, live.
+#[derive(Template)]
+#[template(path = "kernel/dashboard/_incidents_box.html")]
+struct IncidentsBox {
+    incidents: Vec<super::ai_web::IncidentView>,
+}
+
 #[derive(Template)]
 #[template(path = "kernel/dashboard/overview.html")]
 struct OverviewPage {
@@ -1702,6 +1717,24 @@ fn fragments(mode: Mode, q: &StreamQuery) -> Vec<(&'static str, String)> {
             if let Ok(h) = (CardsFragment { cards: cards(mode) }).render() {
                 out.push(("cards", h));
             }
+            if !mode.ro
+                && let Ok(h) = (IncidentsPanel {
+                    incidents: super::ai_web::incident_views(3),
+                    base: mode.base,
+                })
+                .render()
+            {
+                out.push(("incidents", h));
+            }
+        }
+        Some("insights") if !mode.ro => {
+            if let Ok(h) = (IncidentsBox {
+                incidents: super::ai_web::incident_views(super::ai_watch::INCIDENTS),
+            })
+            .render()
+            {
+                out.push(("incidents", h));
+            }
         }
         Some("charts") => {
             let (win, live) = window(Range::parse(q.range.as_deref()), None, None);
@@ -1915,7 +1948,13 @@ async fn insights_page(
         .collect();
     ui::page(InsightsPage {
         chrome: chrome(&state, "Insights", "dashboard", flash, theme),
-        d: dash(DEV, "/insights", None, 0).ai(&state.config, ai::Tab::Insights, None),
+        d: dash(
+            DEV,
+            "/insights",
+            Some("/dev/dashboard/stream?view=insights".into()),
+            2,
+        )
+        .ai(&state.config, ai::Tab::Insights, None),
         findings,
         hidden,
         counts,

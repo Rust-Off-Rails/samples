@@ -13,12 +13,7 @@
   <ul class="digest-list" role="list">{% for l in digest.lines %}<li class="tone-{{ l.tone }}"><span class="dot" aria-hidden="true"></span>{% if let Some(h) = l.href %}<a href="{{ h }}">{{ l.text }}</a>{% else %}{{ l.text }}{% endif %}</li>{% endfor %}</ul>
 </section>
 
-{% if !incidents.is_empty() %}
-<section class="panel" aria-labelledby="ov-incidents">
-  <header><h2 id="ov-incidents">Incidents</h2><a href="{{ d.base }}/insights#incidents">All incidents</a></header>
-  <div class="pad">{% include "kernel/dashboard/_incidents.html" %}</div>
-</section>
-{% endif %}
+<div data-live="incidents">{% let base = d.base %}{% include "kernel/dashboard/_incidents_panel.html" %}</div>
 
 {% if !d.ro && finding_total > 0 %}
 <section class="panel" aria-labelledby="ov-insights">

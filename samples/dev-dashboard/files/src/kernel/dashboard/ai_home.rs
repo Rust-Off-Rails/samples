@@ -933,6 +933,75 @@ pub fn minis(
         .collect()
 }
 
+// ---- the snapshot the AI briefing starts from ------------------------------------------------------
+
+/// A dashboard link as the citation tag the model can repeat (`/dev/dashboard/traces/77` →
+/// `[trace:77]`), when it is one.
+pub fn cite_of(href: &str) -> Option<String> {
+    let p = href
+        .trim_start_matches("/dev/dashboard")
+        .trim_start_matches("/admin/dashboard");
+    let (p, _) = p.split_once(['?', '#']).unwrap_or((p, ""));
+    let segs: Vec<&str> = p.split('/').filter(|s| !s.is_empty()).collect();
+    match segs.as_slice() {
+        ["traces", id] if id.bytes().all(|b| b.is_ascii_digit()) => Some(format!("[trace:{id}]")),
+        ["sql", id] if super::sql::parse_hex(id).is_some() => Some(format!("[sql:{id}]")),
+        ["schema", "tables", t] if super::schema::plain_ident(t) => Some(format!("[table:{t}]")),
+        _ => None,
+    }
+}
+
+/// APP: what the AI briefing starts from, inside the overview's page data: the verdict, the
+/// briefing's lines and the top findings, each with the ids to cite. With it a health summary
+/// needs few tool calls (cheap models used all eight without it).
+pub fn snapshot(f: &Facts, v: Verdict, bullets: &[Bullet]) -> String {
+    let mut s = format!(
+        "## The dashboard's own briefing (deterministic, computed now)\nVerdict: {}\n",
+        v.label()
+    );
+    for b in bullets {
+        let tag = cite_of(&b.href)
+            .map(|t| format!(" {t}"))
+            .unwrap_or_default();
+        let fix = if b.fix.is_empty() {
+            String::new()
+        } else {
+            format!(" (fix: {})", super::ai_context::clean(&b.fix, 100))
+        };
+        s.push_str(&format!(
+            "{}. [{}] {}{fix}{tag}\n",
+            b.n,
+            b.tone,
+            super::ai_context::clean(&b.text, 200)
+        ));
+    }
+    if !f.findings.is_empty() {
+        s.push_str("## Top findings (cite them as [finding:<id>])\n");
+        for x in f.findings.iter().take(8) {
+            let tag = cite_of(&x.href)
+                .map(|t| format!(" {t}"))
+                .unwrap_or_default();
+            s.push_str(&format!(
+                "- [finding:{}] {} {}: {}{tag}\n",
+                super::web::finding_id(&x.key),
+                x.severity.key(),
+                super::ai_context::clean(&x.title, 120),
+                super::ai_context::clean(&x.evidence, 200),
+            ));
+        }
+    }
+    for n in &f.n_plus_one {
+        s.push_str(&format!(
+            "- N+1 on {}: {} statements in one request, {} requests [trace:{}]\n",
+            super::ai_context::clean(&n.route, 120),
+            n.count,
+            n.times,
+            n.trace
+        ));
+    }
+    s
+}
+
 // ---- the AI part ---------------------------------------------------------------------------------
 
 /// The boot briefing's run, once started (one per process).
@@ -957,7 +1026,7 @@ pub struct AiPart {
 /// Builds the overview's prepared context (shared by the prompt box and the briefing button) and
 /// finds the latest health summary; with `DASHBOARD_AI_PROACTIVE=true`, starts the boot briefing
 /// on the first visit (once per process, within the budget).
-pub async fn ai_part(state: &AppState, mode: Mode, owner: Option<&str>) -> AiPart {
+pub async fn ai_part(state: &AppState, mode: Mode, owner: Option<&str>, snapshot: &str) -> AiPart {
     let cfg = &state.config.dashboard.ai;
     let allowed = ai::allowed(&state.config, mode.ro);
     let configured = cfg.provider.is_some();
@@ -995,6 +1064,8 @@ pub async fn ai_part(state: &AppState, mode: Mode, owner: Option<&str>) -> AiPar
     ))
     .await
     .unwrap_or_default();
+    // The briefing first: the model builds on it instead of rediscovering it with tools.
+    let ctx = format!("{snapshot}\n{ctx}");
     let prepared = ai::store(Tab::Overview, None, ctx);
     p.preview = serde_json::to_string_pretty(&ai_web::first_body(
         state,
@@ -1129,7 +1200,7 @@ pub async fn build(
         &bullets,
         mode.base,
     );
-    let ai = ai_part(state, mode, owner).await;
+    let ai = ai_part(state, mode, owner, &snapshot(&f, v, &bullets)).await;
     CommandCenter {
         base: mode.base,
         ro: mode.ro,

@@ -610,15 +610,73 @@ async fn drive(state: &AppState, run: &Run, system: &str, first: &str) {
         let turn = parse_turn(&cfg, &v);
         let spent = turn.input_tokens + turn.output_tokens;
         tokens += spent;
-        ai::budget(&cfg).spend_io(ai::today(), turn.input_tokens, turn.output_tokens);
+        {
+            let mut b = ai::budget(&cfg);
+            b.spend_io(ai::today(), turn.input_tokens, turn.output_tokens);
+            if run.record().kind == Kind::Incident {
+                b.spent_by_watcher(ai::today(), spent);
+            }
+        }
         run.update(|r| {
             r.input_tokens += turn.input_tokens;
             r.output_tokens += turn.output_tokens;
             r.calls += 1;
         });
         if turn.calls.is_empty() || choice == ToolChoice::Final {
-            let text = turn.text.trim().to_owned();
-            let note = turn.note.clone().unwrap_or_default();
+            let mut text = turn.text.trim().to_owned();
+            let mut note = turn.note.clone().unwrap_or_default();
+            let mut cut = turn.cut;
+            let mut answered_turn = v.clone();
+            // The last call came back without an answer (a model that still asks for tools, or
+            // says nothing): one more call that may only answer, so a run never ends empty.
+            if text.is_empty() && choice == ToolChoice::Final && note.is_empty() {
+                if !turn.calls.is_empty() {
+                    convo.push(assistant_turn(&cfg, &v));
+                    let results: Vec<(String, String, bool)> = turn
+                        .calls
+                        .iter()
+                        .enumerate()
+                        .map(|(i, c)| {
+                            let id = if c.id.is_empty() {
+                                format!("call_{step}_{i}")
+                            } else {
+                                c.id.clone()
+                            };
+                            (id, "Not run: the call limit is reached.".to_owned(), true)
+                        })
+                        .collect();
+                    convo.extend(tool_results(&cfg, &results));
+                }
+                convo.push(ai::user_turn(ANSWER_NOW_PROMPT));
+                let left = deadline.saturating_duration_since(Instant::now());
+                let rescued =
+                    if ai::budget(&cfg).reserve_call(ai::today()).is_ok() && !left.is_zero() {
+                        let body = ai::cached(
+                            &cfg,
+                            ai::request(&cfg, system, &convo, &tools, ToolChoice::Final),
+                            true,
+                        );
+                        ai::send_raw(&cfg, &body, limits.call_timeout.min(left))
+                            .await
+                            .ok()
+                    } else {
+                        None
+                    };
+                if let Some(v2) = rescued {
+                    let t2 = parse_turn(&cfg, &v2);
+                    ai::budget(&cfg).spend_io(ai::today(), t2.input_tokens, t2.output_tokens);
+                    tokens += t2.input_tokens + t2.output_tokens;
+                    run.update(|r| {
+                        r.input_tokens += t2.input_tokens;
+                        r.output_tokens += t2.output_tokens;
+                        r.calls += 1;
+                    });
+                    text = t2.text.trim().to_owned();
+                    note = t2.note.clone().unwrap_or_default();
+                    cut = t2.cut;
+                    answered_turn = v2;
+                }
+            }
             if text.is_empty() {
                 let why = if !note.is_empty() {
                     note
@@ -639,12 +697,12 @@ async fn drive(state: &AppState, run: &Run, system: &str, first: &str) {
                 tokens,
                 "dashboard: the AI agent answered"
             );
-            convo.push(assistant_turn(&cfg, &v));
+            convo.push(assistant_turn(&cfg, &answered_turn));
             lock(&run.convo).1 = convo;
             run.update(|r| {
                 r.answer = text;
                 r.note = note;
-                r.cut = turn.cut;
+                r.cut = cut;
             });
             return finish(run, Status::Done);
         }
@@ -738,6 +796,9 @@ async fn drive(state: &AppState, run: &Run, system: &str, first: &str) {
         )),
     );
 }
+
+/// APP: what the extra call asks when the last allowed call came back without an answer.
+pub const ANSWER_NOW_PROMPT: &str = "That was the last tool call this run allows. Answer now from what you have: the bottom line first, then the evidence with its citation tags; say what you couldn't check.";
 
 /// APP: what Continue asks the model.
 pub const CONTINUE_PROMPT: &str = "Your answer was cut at its length limit. Continue exactly where it stopped: no preamble, don't repeat anything, keep the same format and citation tags.";

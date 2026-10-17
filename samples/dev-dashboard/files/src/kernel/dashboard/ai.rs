@@ -449,6 +449,10 @@ pub fn system_prompt(tab: Tab) -> String {
          sqlp95, pool, tasks), [table:<name>], [finding:<id>], [file:<path>:<line>], [job:<id>], \
          [mail:<id>]. Each tag becomes a link, and a chart tag draws that chart under the \
          paragraph. Cite only ids you have seen.\n\n\
+         Start with the bottom line: one or two sentences that answer the question. Then the \
+         evidence, each claim with its citation tag. Never describe the dashboard's interface \
+         (buttons, panels, what you proposed or are about to call): proposals show up by \
+         themselves; write about the app.\n\n\
          Answer in plain Markdown (headings, lists, `code`, fenced code blocks; no HTML, no \
          images, no links other than the tags). Be concrete: name the route, query, table, file \
          or test, and say why. When you propose a code change, end with a `## Fix` section (the \
@@ -471,8 +475,10 @@ pub fn system_prompt(tab: Tab) -> String {
 pub const HEALTH_QUESTION: &str = "Write a health summary of this app right now. Start with a \
      one-line verdict: Healthy, Needs attention, or Unhealthy. Then a short 'Healthy' list, a \
      'Needs attention' list ranked by impact, and 'Fix first': the one thing to do next and why. \
-     Back every claim with a citation tag. Call get_overview and list_insights first; look deeper \
-     only where something is off.";
+     Every claim carries a citation tag ([trace:…], [sql:…], [route:…], [finding:…], \
+     [chart:…]). The page data starts with the dashboard's own briefing and its top findings with \
+     their evidence ids: build on them, and call a tool only to check what they don't settle \
+     (three calls at most). Be complete but tight: a paragraph is fine, an essay is not.";
 
 // ---- prepared contexts -------------------------------------------------------------------------
 
@@ -811,7 +817,7 @@ impl AiError {
             AiError::TooLarge => format!("The answer was over {} KB and was refused.", MAX_RESPONSE_BYTES / 1024),
             AiError::Provider(401 | 403, _) => "The provider refused the key: check DASHBOARD_AI_API_KEY.".into(),
             AiError::Provider(429, m) => format!("The provider is rate limiting this key (429). {m}"),
-            AiError::Provider(s, m) => format!("The provider answered {s}. {m}"),
+            AiError::Provider(s, m) => format!("The provider answered {s}. {m}{}", provider_hint(*s, m)),
             AiError::BadAnswer => "The provider's answer had no text in it.".into(),
         }
     }
@@ -885,16 +891,82 @@ pub async fn send_raw(ai: &DashboardAi, body: &Value, timeout: Duration) -> Resu
     }
     let v: Value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
     if !status.is_success() {
-        let msg = v["error"]["message"]
-            .as_str()
-            .or_else(|| v["error"].as_str())
-            .unwrap_or("");
+        let msg = if v.is_null() {
+            String::from_utf8_lossy(&raw[..raw.len().min(300)]).into_owned()
+        } else {
+            provider_message(&v)
+        };
         return Err(AiError::Provider(
             status.as_u16(),
-            crate::kernel::ui::truncate(&crate::kernel::redact::text(msg), 300),
+            crate::kernel::ui::truncate(&crate::kernel::redact::text(&msg), 400),
         ));
     }
     Ok(v)
+}
+
+/// What a provider's error says, as fully as it says it: the message, its type or code, and a
+/// gateway's upstream error (OpenRouter puts the real one in `error.metadata.raw`, with the
+/// upstream provider's name). The caller redacts it.
+pub fn provider_message(v: &Value) -> String {
+    let e = &v["error"];
+    let mut parts: Vec<String> = Vec::new();
+    let mut push = |s: &str| {
+        let s = s.trim();
+        if !s.is_empty() && !parts.iter().any(|p| p.contains(s)) {
+            parts.push(s.to_owned());
+        }
+    };
+    push(e["message"].as_str().or_else(|| e.as_str()).unwrap_or(""));
+    for k in ["type", "code", "param"] {
+        match &e[k] {
+            Value::String(t) => push(&format!("({k}: {t})")),
+            Value::Number(n) => push(&format!("({k}: {n})")),
+            _ => {}
+        }
+    }
+    let meta = &e["metadata"];
+    if let Some(name) = meta["provider_name"].as_str() {
+        push(&format!("upstream: {name}"));
+    }
+    if let Some(raw) = meta["raw"].as_str() {
+        match serde_json::from_str::<Value>(raw) {
+            Ok(inner) => {
+                let m = inner["error"]["message"]
+                    .as_str()
+                    .or_else(|| inner["message"].as_str())
+                    .or_else(|| inner["error"].as_str())
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| inner.to_string());
+                push(&m);
+            }
+            Err(_) => push(raw),
+        }
+    }
+    parts.join(" ")
+}
+
+/// A hint for a provider's error, from what it says.
+fn provider_hint(status: u16, msg: &str) -> &'static str {
+    let m = msg.to_ascii_lowercase();
+    if m.contains("context")
+        && (m.contains("length") || m.contains("too long") || m.contains("maximum"))
+    {
+        " Hint: the conversation is over the model's context window: lower MAX_CONTEXT_CHARS, or pick a model with a larger one."
+    } else if m.contains("tool") && (m.contains("support") || m.contains("choice")) {
+        " Hint: this model may not support tool calling: pick one whose supported_parameters include tools and tool_choice, or set DASHBOARD_AI_TOOLS=core."
+    } else if m.contains("unsupported")
+        || m.contains("unknown parameter")
+        || m.contains("not supported")
+    {
+        " Hint: the model refused a request parameter; another model (or provider route) may accept it."
+    } else if status == 404 || (m.contains("model") && (m.contains("not") || m.contains("invalid")))
+    {
+        " Hint: check DASHBOARD_AI_MODEL against the provider's model list."
+    } else if status == 402 || m.contains("credit") || m.contains("balance") {
+        " Hint: the provider account is out of credit."
+    } else {
+        ""
+    }
 }
 
 /// Sends `body` and reads the text answer (no tools).
@@ -1011,6 +1083,8 @@ pub struct Budget {
     pub tokens: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// What the watcher's own investigations spent today (part of `tokens`).
+    pub watcher_tokens: u64,
     pub caps: Caps,
     recent: VecDeque<Instant>,
 }
@@ -1051,6 +1125,7 @@ impl Budget {
             self.tokens = 0;
             self.input_tokens = 0;
             self.output_tokens = 0;
+            self.watcher_tokens = 0;
         }
     }
 
@@ -1141,6 +1216,12 @@ impl Budget {
         self.output_tokens = self.output_tokens.saturating_add(output);
     }
 
+    /// Counts one call of the watcher's (after `spend_io`): its share shows in `left`.
+    pub fn spent_by_watcher(&mut self, today: i64, tokens: u64) {
+        self.roll(today);
+        self.watcher_tokens = self.watcher_tokens.saturating_add(tokens);
+    }
+
     /// "193 questions and 9,391,200 tokens left today · about $0.0123 spent today (cap $1.00)".
     pub fn left(&mut self, today: i64) -> String {
         self.roll(today);
@@ -1154,6 +1235,15 @@ impl Budget {
             if let Some(cap) = self.caps.usd {
                 s.push_str(&format!(" (cap {})", usd(cap)));
             }
+        }
+        if self.watcher_tokens > 0 && self.tokens > 0 {
+            s.push_str(&format!(
+                " · the watcher used {} of today's tokens",
+                format_args!(
+                    "{:.0}%",
+                    self.watcher_tokens as f64 * 100.0 / self.tokens as f64
+                )
+            ));
         }
         s
     }
@@ -1381,7 +1471,19 @@ fn inlines(s: &str, cx: &Cx, charts: &mut Vec<ChartAt>) -> Vec<Inline> {
                 let after = &rest[c + 1..];
                 match after.find('`') {
                     Some(end) => {
-                        out.push(code_or_guide(&after[..end]));
+                        // A citation the model put in backticks is still a citation.
+                        let inner = after[..end].trim();
+                        match inner
+                            .strip_prefix('[')
+                            .and_then(|i| i.strip_suffix(']'))
+                            .and_then(|i| cite(i, cx))
+                        {
+                            Some((inline, chart)) => {
+                                out.push(inline);
+                                charts.extend(chart);
+                            }
+                            None => out.push(code_or_guide(&after[..end])),
+                        }
                         rest = &after[end + 1..];
                     }
                     None => {
@@ -1420,12 +1522,21 @@ fn text(s: &str, cx: &Cx, charts: &mut Vec<ChartAt>, out: &mut Vec<Inline>) {
         let tail = &rest[open + 1..];
         let Some(close) = tail.find(']') else { break };
         let inner = &tail[..close];
-        match cite(inner, cx) {
-            Some((inline, chart)) => {
+        // One tag, or several in one bracket ("[trace:1, trace:2]").
+        let several: Option<Vec<_>> = if inner.contains([',', ';']) {
+            inner.split([',', ';']).map(|p| cite(p, cx)).collect()
+        } else {
+            None
+        };
+        match cite(inner, cx).map(|c| vec![c]).or(several) {
+            Some(found) => {
                 guides(&rest[..open], out);
-                out.push(inline);
-                if let Some(c) = chart {
-                    charts.push(c);
+                for (i, (inline, chart)) in found.into_iter().enumerate() {
+                    if i > 0 {
+                        push_text(out, " ");
+                    }
+                    out.push(inline);
+                    charts.extend(chart);
                 }
             }
             None => guides(&rest[..open + 1 + close + 1], out),
@@ -1478,22 +1589,38 @@ fn cite(inner: &str, cx: &Cx) -> Option<(Inline, Option<ChartAt>)> {
     if inner.len() > 160 || inner.chars().any(char::is_control) {
         return None;
     }
-    let (kind, value) = inner.split_once(':')?;
-    let value = value.trim();
+    // Tolerant of how models write them: `kind:value`, `Kind: value`, `kind value`, `#580`, a
+    // trailing comma, backticks.
+    const KINDS: &[&str] = &[
+        "trace", "sql", "route", "chart", "table", "finding", "file", "job", "mail",
+    ];
+    let inner = inner.trim().trim_matches('`').trim();
+    let (kind, value) = match inner.split_once(':') {
+        Some((k, v)) if KINDS.contains(&k.trim().to_ascii_lowercase().as_str()) => (k, v),
+        _ => inner
+            .split_once(' ')
+            .filter(|(k, _)| KINDS.contains(&k.trim().to_ascii_lowercase().as_str()))?,
+    };
+    let kind = kind.trim().to_ascii_lowercase();
+    let value = value
+        .trim()
+        .trim_start_matches('#')
+        .trim_end_matches([',', ';', '.'])
+        .trim();
     let dev = cx.base == "/dev/dashboard";
     let link = |href: String| Some(href);
     let digits = |s: &str| !s.is_empty() && s.len() <= 20 && s.bytes().all(|b| b.is_ascii_digit());
     let c = |label: String, href: Option<String>, k: &'static str| {
         Some((Inline::Cite(label, href, k), None))
     };
-    match kind.trim() {
+    match kind.as_str() {
         "trace" if digits(value) => c(
             format!("trace {value}"),
             link(format!("{}/traces/{value}", cx.base)),
             "trace",
         ),
         "sql" => {
-            let id = super::sql::parse_hex(value)?;
+            let id = super::sql::parse_hex(value.trim_start_matches("0x"))?;
             c(
                 format!("SQL {}", super::sql::hex(id)),
                 link(format!("{}/sql/{}", cx.base, super::sql::hex(id))),
@@ -1501,12 +1628,27 @@ fn cite(inner: &str, cx: &Cx) -> Option<(Inline, Option<ChartAt>)> {
             )
         }
         "route" => {
-            let (method, path) = value.split_once(' ')?;
-            let path = path.trim();
-            let known = super::route_explorer::table()
-                .into_iter()
-                .any(|r| r.method == method && r.path == path);
-            known.then_some(())?;
+            let mut words = value.split_whitespace();
+            let method = words.next()?.to_ascii_uppercase();
+            let path = words.next()?.split(['?', '#']).next()?;
+            let verb = matches!(
+                method.as_str(),
+                "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS"
+            );
+            let plain = path.starts_with('/')
+                && path.len() <= 120
+                && path
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "/_-.{}:*".contains(c));
+            (verb && plain).then_some(())?;
+            // The pattern itself, or a concrete path ("/orders/42") the table matches to one.
+            let table = super::route_explorer::table();
+            let known = |p: &str| table.iter().any(|r| r.method == method && r.path == p);
+            let path = if known(path) {
+                path
+            } else {
+                Some(super::http::route_of(&method, path)).filter(|p| known(p))?
+            };
             c(
                 format!("{method} {path}"),
                 link(format!(
@@ -1543,7 +1685,19 @@ fn cite(inner: &str, cx: &Cx) -> Option<(Inline, Option<ChartAt>)> {
             dev.then(|| format!("{}/insights#finding-{value}", cx.base)),
             "finding",
         ),
-        "file" if super::ai_tools::citable_path(value) => c(value.to_owned(), None, "file"),
+        "file" => {
+            // "src/x.rs:303", "src/x.rs:303-310", "src/x.rs:L303", "src/x.rs:303–310".
+            let v = value.replace(['–', '—'], "-").replace(":L", ":");
+            let plain = v.len() <= 160
+                && v.contains('/')
+                && !v.starts_with('/')
+                && !v.split('/').any(|seg| seg.starts_with('.'))
+                && v.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "/_-.:".contains(c))
+                && !v.contains("..");
+            (super::ai_tools::citable_path(&v) || plain).then_some(())?;
+            c(v, None, "file")
+        }
         "job" if digits(value) => c(
             format!("job {value}"),
             dev.then(|| format!("/admin/jobs/{value}")),

@@ -8,6 +8,8 @@
     <span class="cc-chevron" aria-hidden="true"></span>
   </summary>
   <div class="cc-body">
+    {# The briefing and the AI briefing's controls side by side; the AI briefing's run below, full width. #}
+    <div class="cc-main"{% if cc.ai.allowed %} id="health" data-ai-scope{% endif %}>
     <div class="cc-top{% if !cc.ai.allowed %} solo{% endif %}">
       <section class="cc-brief" aria-labelledby="cc-brief-h">
         <h2 id="cc-brief-h">Briefing <span class="cc-tag">no key needed</span></h2>
@@ -22,17 +24,17 @@
         </ol>
       </section>
       {% if cc.ai.allowed %}
-      <section class="cc-ai" id="health" aria-labelledby="cc-ai-h" data-ai-scope>
+      <section class="cc-ai" aria-labelledby="cc-ai-h">
         <h2 id="cc-ai-h">AI briefing {% if cc.ai.configured %}<span class="cc-tag">{{ cc.ai.provider }}</span>{% endif %}</h2>
         {% if cc.ai.configured %}
         {% if !cc.ai.note.is_empty() %}<p class="hint">{{ cc.ai.note }}</p>{% endif %}
-        <div class="ai-answer" data-ai-answer aria-live="polite">{% if let Some(r) = cc.ai.run %}{% include "kernel/dashboard/_ai_run.html" %}{% endif %}</div>
         <form class="cc-health" method="post" action="{{ cc.base }}/ai/ask" data-ai-form data-runs="{{ cc.base }}/ai/runs">
           <input type="hidden" name="prepared" value="{{ cc.ai.prepared }}">
           <input type="hidden" name="tab" value="overview">
           <input type="hidden" name="item" value="">
           <input type="hidden" name="kind" value="health">
           <div class="row ai-actions"><button class="btn {% if cc.ai.run.is_none() %}primary cc-big{% endif %}" data-ai-send>{% if cc.ai.run.is_none() %}Generate AI briefing{% else %}Regenerate the AI briefing{% endif %}</button><span class="ai-busy" data-ai-busy hidden><span class="spinner" aria-hidden="true"></span> Starting…</span></div>
+          <p class="hint small">{{ cc.ai.left }}</p>
           {% if cc.ai.run.is_none() %}<p class="hint">The agent reads the overview and the insights, looks deeper where something is off, and writes the verdict, what needs attention and what to fix first, each claim linked to its evidence.</p>{% endif %}
           <details class="ai-preview"><summary>Preview what will be sent first</summary><pre class="code ai-json" tabindex="0">{{ cc.ai.health_preview }}</pre></details>
         </form>
@@ -41,6 +43,8 @@
         {% endif %}
       </section>
       {% endif %}
+    </div>
+    {% if cc.ai.allowed && cc.ai.configured %}<div class="ai-answer cc-run" data-ai-answer aria-live="polite">{% if let Some(r) = cc.ai.run %}{% include "kernel/dashboard/_ai_run.html" %}{% endif %}</div>{% endif %}
     </div>
 
     <section class="cc-ask" id="cc-ask" aria-labelledby="cc-ask-h" data-ai-scope>

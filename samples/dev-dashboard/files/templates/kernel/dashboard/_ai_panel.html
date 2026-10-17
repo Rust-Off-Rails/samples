@@ -10,7 +10,7 @@
     <input type="hidden" name="item" value="{{ p.item }}">
     <input type="hidden" name="kind" value="ask">
     <div class="ai-prompts" role="group" aria-label="Suggested questions">{% for s in p.suggestions %}<button type="button" class="chip" data-ai-prompt>{{ s }}</button>{% endfor %}</div>
-    <label class="ai-label" for="ai-q-{{ p.tab }}">Your question <span class="muted">({{ p.tab_label }}{% if !p.item.is_empty() %}: {{ p.item }}{% endif %})</span></label>
+    <label class="ai-label" for="ai-q-{{ p.tab }}">Your question <span class="muted">({{ p.tab_label }}{% if !p.item_title.is_empty() %}: {{ p.item_title }}{% endif %})</span></label>
     <textarea id="ai-q-{{ p.tab }}" name="question" rows="3" maxlength="2000" required data-ai-question>{{ p.question }}</textarea>
     <details class="ai-preview"><summary>Preview what will be sent first <span class="muted">({{ p.chars }} characters, about {{ p.tokens }} tokens, to {{ p.provider }} · {{ p.model }})</span></summary>
       <p class="hint">POST <code>{{ p.endpoint }}</code>. The agent may then call these read-only tools, up to {{ p.max_steps }} calls; each call and its result shows as it happens and stays in the history.</p>

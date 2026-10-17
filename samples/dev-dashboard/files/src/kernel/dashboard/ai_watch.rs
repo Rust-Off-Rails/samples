@@ -40,6 +40,14 @@ pub const WATCH_EVERY: Duration = Duration::from_secs(10);
 pub const DEBOUNCE: Duration = Duration::from_secs(10 * 60);
 pub const PER_HOUR: usize = 6;
 pub const INCIDENTS: usize = 20;
+/// APP: the boot's warm-up: the first look this long after boot (the charts need a baseline,
+/// and a demo's or a restart's backlog of signals fires all at once otherwise), and at most
+/// `BOOT_INVESTIGATIONS` investigations in the first `BOOT_WINDOW`, the most severe first.
+// WHY: right after boot the watcher saw every signal at once and spent most of a day's budget
+// in its first minutes.
+pub const WARMUP: Duration = Duration::from_secs(60);
+pub const BOOT_WINDOW: Duration = Duration::from_secs(10 * 60);
+pub const BOOT_INVESTIGATIONS: usize = 2;
 /// APP: the signals' thresholds.
 pub const SPIKE_FACTOR: f64 = 2.0;
 pub const ERROR_BURST: f64 = 10.0;
@@ -80,6 +88,7 @@ pub struct WatchState {
     seen_tests: HashSet<String>,
     drift_checked: Option<Instant>,
     jobs_failed: Option<i64>,
+    boot_investigations: usize,
 }
 
 pub static WATCH: LazyLock<Mutex<WatchState>> = LazyLock::new(|| Mutex::new(WatchState::default()));
@@ -99,8 +108,7 @@ pub fn spawn(state: AppState) {
     tokio::spawn(async move {
         // WHY: the first look one interval after boot: the charts have a baseline by then, and a
         // local provider started alongside the app is up.
-        let mut every =
-            tokio::time::interval_at(tokio::time::Instant::now() + WATCH_EVERY, WATCH_EVERY);
+        let mut every = tokio::time::interval_at(tokio::time::Instant::now() + WARMUP, WATCH_EVERY);
         every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             every.tick().await;
@@ -117,7 +125,14 @@ pub fn incidents() -> Vec<Incident> {
 /// One round: detect, then post (and maybe investigate) each signal that isn't debounced.
 /// Returns the incidents it posted.
 pub async fn tick(state: &AppState) -> Vec<Incident> {
-    let signals = detect(state).await;
+    let mut signals = detect(state).await;
+    // The most severe first: under the hourly and boot caps they are the ones investigated.
+    let rank = |s: &Signal| match s.severity {
+        "high" => 0,
+        "medium" => 1,
+        _ => 2,
+    };
+    signals.sort_by_key(rank);
     let mut posted = Vec::new();
     for s in signals {
         let fresh = {
@@ -172,6 +187,21 @@ async fn investigate(state: &AppState, s: &Signal) -> (Option<String>, String) {
                 None,
                 format!("Not investigated: {PER_HOUR} auto-investigations this hour (PER_HOUR)."),
             );
+        }
+        let booted = (Utc::now() - *crate::kernel::ui::BOOTED_AT)
+            .to_std()
+            .unwrap_or_default();
+        if booted < BOOT_WINDOW {
+            w.boot_investigations += 1;
+            if w.boot_investigations > BOOT_INVESTIGATIONS {
+                return (
+                    None,
+                    format!(
+                        "Not investigated: at most {BOOT_INVESTIGATIONS} investigations in the first {} minutes after boot (BOOT_INVESTIGATIONS); open it and ask if it matters.",
+                        BOOT_WINDOW.as_secs() / 60
+                    ),
+                );
+            }
         }
         w.investigations.push_back(Instant::now());
     }

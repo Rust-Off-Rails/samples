@@ -136,6 +136,8 @@ pub struct AiPanel {
     pub tab: &'static str,
     pub tab_label: &'static str,
     pub item: String,
+    /// The item in words ("N+1 on /orders", "the lab_orders table"), never a raw id alone.
+    pub item_title: String,
     pub provider: &'static str,
     pub model: String,
     pub endpoint: String,
@@ -178,7 +180,7 @@ pub struct RunView {
     pub question: String,
     pub status: &'static str,
     pub status_text: String,
-    pub steps: Vec<Step>,
+    pub steps: Vec<StepView>,
     pub blocks: Vec<ai::Block>,
     pub note: String,
     pub error: Option<String>,
@@ -215,6 +217,35 @@ impl RunView {
             when: String::new(),
             can_continue: false,
         }
+    }
+}
+
+/// A step as the page shows it: what the model said before the call goes through the same
+/// renderer as the answer (escaped Markdown, citations as chips), never as raw text.
+pub struct StepView {
+    pub n: usize,
+    pub title: String,
+    pub call: String,
+    pub note: Vec<ai::Block>,
+    pub result: String,
+    pub is_error: bool,
+    pub ms: u64,
+}
+
+pub fn step_view(s: &Step, base: &str) -> StepView {
+    let base = if base.is_empty() {
+        "/dev/dashboard"
+    } else {
+        base
+    };
+    StepView {
+        n: s.n,
+        title: s.title.clone(),
+        call: s.call.clone(),
+        note: ai::render_in(&s.note, base, chrono::Utc::now().timestamp()),
+        result: s.result.clone(),
+        is_error: s.is_error,
+        ms: s.ms,
     }
 }
 
@@ -298,7 +329,7 @@ pub fn run_view(rec: &Record, live: bool) -> RunView {
         },
         status: rec.status.key(),
         status_text,
-        steps: rec.steps.clone(),
+        steps: rec.steps.iter().map(|s| step_view(s, &base)).collect(),
         blocks: answer_blocks(&rec.answer, &base),
         note: rec.note.clone(),
         error,
@@ -343,7 +374,7 @@ struct RunFragment {
 #[derive(Template)]
 #[template(path = "kernel/dashboard/_ai_step.html")]
 struct StepFragment {
-    s: Step,
+    s: StepView,
 }
 
 #[derive(Template)]
@@ -478,6 +509,32 @@ pub fn first_body(
     )
 }
 
+/// What a page's item is, in words, for the panel's and the page's heading.
+pub async fn item_title(state: &AppState, tab: Tab, item: &str) -> String {
+    let t = match tab {
+        Tab::Insights => super::web::all_findings(state, &Default::default())
+            .await
+            .into_iter()
+            .find(|f| f.id == item)
+            .map_or_else(|| "a finding".to_owned(), |f| f.title),
+        Tab::Sql => lock(&super::HUB.sql)
+            .rows(super::sql::Sort::Count)
+            .into_iter()
+            .find(|r| r.id == item)
+            .map_or_else(
+                || "a query".to_owned(),
+                |r| format!("the query {}", ui::truncate(&r.sql, 60)),
+            ),
+        Tab::Traces => format!("trace {item}"),
+        Tab::Schema => format!("the {item} table"),
+        Tab::Mailbox => format!("email {item}"),
+        Tab::Jobs if item == "errors" => "the job errors".to_owned(),
+        Tab::Jobs => format!("job {item}"),
+        _ => item.to_owned(),
+    };
+    ui::truncate(&t, 90)
+}
+
 /// Builds the context for `tab`, stores it for the Ask button; the panel shows its preview.
 pub async fn panel_for(
     state: &AppState,
@@ -495,6 +552,10 @@ pub async fn panel_for(
         tab: tab.key(),
         tab_label: tab.label(),
         item: item.clone().unwrap_or_default(),
+        item_title: match item.as_deref() {
+            Some(i) => item_title(state, tab, i).await,
+            None => String::new(),
+        },
         provider: provider_label(cfg),
         model: cfg.model.clone(),
         endpoint: ai::endpoint(cfg),
@@ -772,10 +833,14 @@ async fn run_page(
         return Err(AppError::NotFound);
     }
     let rec = if let Some(run) = ai_agent::get(&id) {
-        if !run.owned_by(cookie::get(&headers, ai_agent::OWNER_COOKIE).as_deref()) {
+        let owns = run.owned_by(cookie::get(&headers, ai_agent::OWNER_COOKIE).as_deref());
+        // SECURITY: a live run is its browser's only; once finished it is in the history every
+        // dashboard viewer sees, so its permalink opens in any browser, as a run read back from
+        // disk does (test: a_run_stream_is_bound_to_its_browser)
+        if !owns && !run.record().status.finished() {
             return Err(AppError::NotFound);
         }
-        if q.wait.is_some() {
+        if owns && q.wait.is_some() {
             ai_agent::wait(&run, NO_JS_WAIT).await;
         }
         run.record()
@@ -823,7 +888,7 @@ async fn run_stream(
                 let rec = run.record();
                 if rec.steps.len() > sent {
                     let html = StepFragment {
-                        s: rec.steps[sent].clone(),
+                        s: step_view(&rec.steps[sent], &rec.base),
                     }
                     .render()
                     .unwrap_or_default();

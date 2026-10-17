@@ -364,9 +364,67 @@ impl Action {
                 |s| format!("Run the {} scenario", s.label()),
             ),
             "run_tests" => format!("Run the tests ({})", self.target),
-            _ => format!("Open {}", self.target),
+            _ => page_label(&self.target),
         }
     }
+}
+
+/// A human name for a page an action opens ("Open the N+1 query", not a raw path).
+pub fn page_label(path: &str) -> String {
+    let (p, query) = path.split_once('?').unwrap_or((path, ""));
+    let (p, anchor) = p.split_once('#').unwrap_or((p, ""));
+    let p = p
+        .trim_start_matches("/dev/dashboard")
+        .trim_start_matches("/admin/dashboard");
+    let p = p
+        .strip_prefix("/dev/")
+        .or_else(|| p.strip_prefix("/admin/"))
+        .unwrap_or(p);
+    let segs: Vec<&str> = p.split('/').filter(|s| !s.is_empty()).collect();
+    let label = match segs.as_slice() {
+        [] => "Open the overview".to_owned(),
+        ["sql"] if anchor == "n-plus-one" => "Open the N+1 list".to_owned(),
+        ["sql", id] => {
+            let n1 = super::sql::parse_hex(id)
+                .is_some_and(|fp| lock(&HUB.sql).n_plus_one().iter().any(|n| n.fp == fp));
+            if n1 {
+                "Open the N+1 query".to_owned()
+            } else {
+                "Open the query".to_owned()
+            }
+        }
+        ["traces", id] => format!("Open trace {id}"),
+        ["traces"] if query.starts_with("route=") => "Open this route's traces".to_owned(),
+        ["schema", "tables", t] => format!("Open the {t} table"),
+        ["schema", "migrations"] => "Open the migrations".to_owned(),
+        ["logs"] if query.contains("level=error") => "Open the error log".to_owned(),
+        ["mailbox", id] => format!("Open email {id}"),
+        ["jobs", "errors"] => "Open the job errors".to_owned(),
+        ["jobs", id] => format!("Open job {id}"),
+        [one] => format!(
+            "Open {}",
+            match *one {
+                "sql" => "SQL",
+                "insights" => "Insights",
+                "charts" => "the charts",
+                "requests" => "Requests",
+                "routes" => "the routes",
+                "traces" => "the traces",
+                "logs" => "the log",
+                "schema" => "the schema",
+                "tests" => "the test runs",
+                "github" => "GitHub",
+                "lab" => "the load lab",
+                "config" => "Config",
+                "mailbox" => "the mailbox",
+                "jobs" => "the jobs",
+                "sockets" => "sockets",
+                other => other,
+            }
+        ),
+        _ => format!("Open {}", segs.last().copied().unwrap_or("the page")),
+    };
+    crate::kernel::ui::truncate(&label, 60)
 }
 
 /// A tool's answer.
@@ -1185,9 +1243,17 @@ async fn routes_with_problems(state: &AppState) -> String {
 async fn github_status(state: &AppState) -> String {
     let cfg = &state.config.dashboard;
     if cfg.github_repo.is_none() {
-        return "GitHub isn't configured (GITHUB_REPO=owner/name).\n".into();
+        return "GitHub isn't configured for this app (GITHUB_REPO is not set): CI status is unknown, and that's not a problem of the app. Don't call github_status again.\n".into();
     }
     let v = super::github::load(cfg, &HUB.github).await;
+    // Nothing came back (no token for a private repo, offline, a rate limit): a plain "unknown",
+    // so the model doesn't read it as a problem of the app.
+    if v.runs.is_empty() && v.success_rate.is_none() && !v.errors.is_empty() {
+        return format!(
+            "GitHub data isn't available here ({}). CI status is unknown; this is not a problem of the app. Don't call github_status again.\n",
+            ctx::clean(&v.errors[0], 120)
+        );
+    }
     let mut s = String::from("## GitHub (workflow names, conclusions, branches and counts)\n");
     if let Some(r) = v.success_rate {
         let _ = writeln!(s, "CI success rate (recent days): {r:.0}%");
