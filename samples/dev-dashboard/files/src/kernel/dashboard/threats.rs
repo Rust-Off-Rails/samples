@@ -361,6 +361,23 @@ pub fn ua_family(ua: &str) -> &'static str {
     if ua.is_empty() { "(none)" } else { "other" }
 }
 
+/// User agents' families by hash: a client sends the same one on every request. Bounded.
+static FAMILIES: LazyLock<Mutex<HashMap<u64, &'static str>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn cached_family(hash: u64, ua: &str) -> &'static str {
+    if let Some(f) = lock(&FAMILIES).get(&hash) {
+        return f;
+    }
+    let f = ua_family(ua);
+    let mut map = lock(&FAMILIES);
+    if map.len() >= 512 {
+        map.clear();
+    }
+    map.insert(hash, f);
+    f
+}
+
 /// One percent-decoding pass (bounded: a URL past 4 KB is checked as is).
 fn decode(s: &str) -> String {
     if s.len() > 4096 || (!s.contains('%') && !s.contains('+')) {
@@ -403,17 +420,31 @@ fn decode(s: &str) -> String {
 /// The attack patterns in a path and query string (decoded twice: `%252e%252e%252f` is `../`).
 pub fn patterns(path: &str, query: &str) -> u32 {
     let mut flags = 0;
-    let lower_path = path.to_ascii_lowercase();
+    // WHY no allocation on this path: it runs on every request (test: the_middleware_overhead_is_small).
     if PROBE_PATHS.iter().any(|p| {
-        lower_path == *p
-            || lower_path.strip_prefix(p).is_some_and(|rest| {
-                rest.starts_with(['/', '.', '?']) || p.ends_with('/') || p.contains('.')
-            })
+        path.len() >= p.len()
+            && path.is_char_boundary(p.len())
+            && path[..p.len()].eq_ignore_ascii_case(p)
+            && {
+                let rest = &path[p.len()..];
+                rest.is_empty()
+                    || rest.starts_with(['/', '.', '?'])
+                    || p.ends_with('/')
+                    || p.contains('.')
+            }
     }) {
         flags |= sig::PROBE;
     }
     for raw in [path, query] {
-        if raw.is_empty() {
+        // Only text with a character an attack needs is decoded and scanned.
+        let suspicious = raw.bytes().any(|b| {
+            matches!(
+                b,
+                b'%' | b'<' | b'>' | b'\'' | b'"' | b'\\' | b'(' | b';' | b' ' | b'+' | b':'
+            )
+        }) || raw.contains("..")
+            || raw.contains("/etc/");
+        if raw.is_empty() || !suspicious {
             continue;
         }
         let once = decode(raw);
@@ -438,7 +469,7 @@ pub struct Pending {
     ip: Option<IpAddr>,
     /// What the request itself showed (before its answer).
     pub flags: u32,
-    method: String,
+    method: &'static str,
     unsafe_method: bool,
     cross_site: bool,
     bad_host: bool,
@@ -505,12 +536,25 @@ pub fn inspect(req: &Request, route: &'static str) -> Option<Pending> {
     let query = req.uri().query().unwrap_or_default();
     let mut flags = patterns(path, query);
     let method = req.method();
-    let m = method.as_str();
-    if ODD_METHODS.contains(&m) {
-        flags |= sig::ODD_METHOD;
-    }
+    let m: &'static str = match *method {
+        Method::GET => "GET",
+        Method::POST => "POST",
+        Method::PUT => "PUT",
+        Method::PATCH => "PATCH",
+        Method::DELETE => "DELETE",
+        Method::HEAD => "HEAD",
+        Method::OPTIONS => "OPTIONS",
+        _ => match ODD_METHODS.iter().find(|o| **o == method.as_str()) {
+            Some(o) => {
+                flags |= sig::ODD_METHOD;
+                o
+            }
+            None => "OTHER",
+        },
+    };
     let ua = header_str(req, "user-agent").unwrap_or_default();
-    let family = ua_family(ua);
+    let ua_hash = keyed(("ua", ua));
+    let family = cached_family(ua_hash, ua);
     if SCANNER_AGENTS.contains(&family) {
         flags |= sig::SCANNER;
     }
@@ -531,14 +575,13 @@ pub fn inspect(req: &Request, route: &'static str) -> Option<Pending> {
     let host = req
         .uri()
         .authority()
-        .map(|a| a.as_str().to_owned())
-        .or_else(|| header_str(req, "host").map(str::to_owned));
+        .map(|a| a.as_str())
+        .or_else(|| header_str(req, "host"));
     let unsafe_method = !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS);
     let cross_site = header_str(req, "sec-fetch-site").is_some_and(|v| v == "cross-site")
         || header_str(req, "origin").is_some_and(|o| {
             let authority = o.split("://").nth(1).unwrap_or(o);
-            host.as_deref()
-                .is_none_or(|h| !h.eq_ignore_ascii_case(authority))
+            host.is_none_or(|h| !h.eq_ignore_ascii_case(authority))
         });
     let session = req
         .headers()
@@ -556,11 +599,11 @@ pub fn inspect(req: &Request, route: &'static str) -> Option<Pending> {
     Some(Pending {
         ip: client_ip(req, &s),
         flags,
-        method: ui::truncate(m, 16),
+        method: m,
         unsafe_method,
         cross_site,
-        bad_host: !s.hosts.allows(host.as_deref()),
-        ua_hash: keyed(("ua", ua)),
+        bad_host: !s.hosts.allows(host),
+        ua_hash,
         ua: family,
         session,
         sign_in_route: SIGN_IN_ROUTES.contains(&route),
@@ -589,12 +632,29 @@ pub fn finish(p: Pending, status: u16, path: &str, trace: u64) {
     if p.sign_in_route && p.unsafe_method && matches!(status, 401 | 422 | 429) {
         flags |= sig::SIGN_IN_FAILED;
     }
+    let ip = p.ip.map_or(0, keyed);
+    let notable = flags & sig::NOTABLE != 0;
+    let mut t = lock(&HUB.threats);
+    // WHY: the label and the path are built only when something will keep them (a new address,
+    // a flagged request): most requests allocate nothing here.
     let obs = Obs {
         at: Utc::now().timestamp(),
-        ip: p.ip.map_or(0, keyed),
-        ip_label: ip_label(p.ip, s.production),
-        method: p.method,
-        path: clean_path(path),
+        ip,
+        ip_label: if notable || !t.ips.contains_key(&ip) {
+            ip_label(p.ip, s.production)
+        } else {
+            String::new()
+        },
+        method: if notable {
+            p.method.to_owned()
+        } else {
+            String::new()
+        },
+        path: if notable {
+            clean_path(path)
+        } else {
+            String::new()
+        },
         status,
         flags,
         ua_hash: p.ua_hash,
@@ -603,7 +663,7 @@ pub fn finish(p: Pending, status: u16, path: &str, trace: u64) {
         local: p.ip.is_some_and(|ip| ip.is_loopback()),
         trace,
     };
-    lock(&HUB.threats).ingest(obs);
+    t.ingest(obs);
 }
 
 /// A path as kept: redacted (tokens), control characters out, cut.
@@ -873,7 +933,7 @@ impl Threats {
             if let Some(x) = st.ips.iter_mut().find(|(h, _, _)| *h == o.ip) {
                 x.2 = o.at;
             } else if st.ips.len() < MAX_SET {
-                st.ips.push((o.ip, o.ip_label.clone(), o.at));
+                st.ips.push((o.ip, ip.label.clone(), o.at));
             }
             if let Some(x) = st.uas.iter_mut().find(|(h, _)| *h == o.ua_hash) {
                 x.1 = o.at;

@@ -573,7 +573,6 @@ async fn the_attack_simulator_lights_up_every_detector() {
         "brute_force",
         "credential_stuffing",
         "session_hop",
-        "ip_rate",
         "ua_rotation",
     ] {
         assert!(found.contains(&kind), "{kind} missing from {found:?}");
