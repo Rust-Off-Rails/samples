@@ -431,7 +431,7 @@ pub fn briefing(f: &Facts) -> Vec<Bullet> {
                     ),
                     None => x.title.clone(),
                 },
-                _ => format!("{}: {}", x.title, ui::truncate(&x.evidence, 90)),
+                _ => format!("{}: {}", x.title, super::ai::truncate_md(&x.evidence, 90)),
             },
             x.href.clone(),
             "See the evidence",

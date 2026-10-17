@@ -107,6 +107,12 @@ pub struct Node {
     /// Log events on its track: (at, level, message).
     pub events: Vec<(u64, &'static str, String)>,
     pub children: Vec<Node>,
+    /// Outbound HTTP: the API's host (`api.example.com`), shown as a chip.
+    pub host: String,
+    /// Outbound HTTP: the call's short name in notes (`payments`); the label otherwise.
+    pub short: String,
+    /// Outbound HTTP: the call (or an attempt) timed out.
+    pub timeout: bool,
     span_id: Option<u64>,
 }
 
@@ -132,6 +138,9 @@ impl Node {
             gaps: Vec::new(),
             events: Vec::new(),
             children: Vec::new(),
+            host: String::new(),
+            short: String::new(),
+            timeout: false,
             span_id: None,
         }
     }
@@ -189,6 +198,9 @@ pub fn tree(t: &Trace, details: bool) -> Node {
             {
                 n.label = format!("handler {h}");
             }
+        }
+        if kind == "http" {
+            outbound_label(&mut n, s.name, &s.fields);
         }
         n.span_id = Some(s.id);
         index.insert(s.id, nodes.len());
@@ -250,6 +262,60 @@ fn field<'a>(fields: &'a str, name: &str) -> Option<&'a str> {
         let (k, v) = kv.split_once('=')?;
         (k == name).then(|| v.trim_matches('"'))
     })
+}
+
+/// An outbound call's row, from the outbound wrapper's span fields (`kernel::outbound`):
+/// `POST payments /charge → 200`, its host as a chip, attempts as `attempt 2 → 503`, a timeout in
+/// red. Shown in the production view too: service, method, host and route template are no
+/// personal data (span fields stay hidden there).
+fn outbound_label(n: &mut Node, name: &str, fields: &str) {
+    let status = field(fields, "http.status");
+    let outcome = field(fields, "outcome");
+    let result = match (status, outcome) {
+        (Some(s), _) => s.to_owned(),
+        (None, Some("timeout")) => "timeout".to_owned(),
+        (None, Some(o)) => o.replace('_', " "),
+        (None, None) => String::new(),
+    };
+    n.timeout = outcome == Some("timeout");
+    n.failed = n.timeout
+        || matches!(
+            outcome,
+            Some("server_error" | "connect" | "failed" | "too_large")
+        )
+        || status
+            .and_then(|s| s.parse::<u16>().ok())
+            .is_some_and(|s| s >= 500);
+    let arrow = if result.is_empty() {
+        String::new()
+    } else {
+        format!(" → {result}")
+    };
+    if name == "http_attempt" {
+        n.label = format!("attempt {}{arrow}", field(fields, "attempt").unwrap_or("?"));
+        n.short = "attempt".to_owned();
+        return;
+    }
+    let service = field(fields, "service");
+    match (
+        service,
+        field(fields, "http.method"),
+        field(fields, "http.route"),
+    ) {
+        (Some(svc), Some(m), Some(r)) => {
+            let attempts = field(fields, "attempts")
+                .and_then(|a| a.parse::<u32>().ok())
+                .filter(|a| *a > 1)
+                .map(|a| format!(" · {a} attempts"))
+                .unwrap_or_default();
+            n.label = crate::kernel::ui::truncate(&format!("{m} {svc} {r}{arrow}{attempts}"), 90);
+            n.short = svc.to_owned();
+            n.host = field(fields, "http.host").unwrap_or_default().to_owned();
+        }
+        _ => {
+            n.short = service.unwrap_or(name).to_owned();
+        }
+    }
 }
 
 fn sort_rec(n: &mut Node) {
@@ -523,8 +589,15 @@ pub fn sql_summary(sql: &str) -> String {
     let Some(verb) = words.first() else {
         return String::new();
     };
-    let verb = verb.to_ascii_uppercase();
     let upper: Vec<String> = words.iter().map(|w| w.to_ascii_uppercase()).collect();
+    // `SELECT COUNT(*) FROM (SELECT … FROM lab_orders …)` reads as `COUNT lab_orders`.
+    let verb = if upper.first().is_some_and(|v| v == "SELECT")
+        && upper.get(1).is_some_and(|w| w.starts_with("COUNT("))
+    {
+        "COUNT".to_owned()
+    } else {
+        verb.to_ascii_uppercase()
+    };
     // The first `kw <name>` that names a table (not a subquery's parenthesis).
     let after = |kw: &str| {
         upper
@@ -534,12 +607,12 @@ pub fn sql_summary(sql: &str) -> String {
             .filter_map(|(i, _)| words.get(i + 1))
             .find(|t| !t.starts_with('('))
             .map(|t| {
-                let t = unquote(t.trim_end_matches([',', ';', '(']));
+                let t = unquote(t.trim_end_matches([',', ';', '(', ')']));
                 t.rsplit('.').next().unwrap_or(&t).to_owned()
             })
     };
     let table = match verb.as_str() {
-        "SELECT" | "DELETE" => after("FROM"),
+        "SELECT" | "DELETE" | "COUNT" => after("FROM"),
         "INSERT" => after("INTO"),
         "UPDATE" => words.get(1).map(|t| unquote(t)),
         "WITH" => Some("(cte)".to_owned()),
@@ -762,6 +835,9 @@ pub struct Row {
     pub full: String,
     pub sql: Vec<(&'static str, String)>,
     pub events: Vec<(String, &'static str, String)>,
+    /// Outbound HTTP: the API's host; the call timed out.
+    pub host: String,
+    pub timeout: bool,
 }
 
 /// A waterfall, ready to render (`_waterfall.html`).
@@ -790,6 +866,20 @@ pub struct View {
     pub all: bool,
     /// The legend's colors.
     pub keys: Vec<(&'static str, &'static str)>,
+    /// Outbound calls that ran one after another and look independent.
+    pub seq: Option<SeqNote>,
+    /// The most outbound calls that ran at once (2 or more: they ran concurrently).
+    pub concurrent: usize,
+}
+
+/// "These 3 calls run one after another; running them concurrently would save ~X".
+pub struct SeqNote {
+    pub count: usize,
+    pub parent: String,
+    pub path: String,
+    pub total: String,
+    pub longest: String,
+    pub saving: String,
 }
 
 pub struct NPlusOneNote {
@@ -901,6 +991,15 @@ pub fn view(
         compact,
         all,
         keys: KINDS.to_vec(),
+        seq: super::upstreams::sequential(&root).map(|q| SeqNote {
+            count: q.calls.len(),
+            parent: q.parent.clone(),
+            path: q.path(),
+            total: micros(q.total_us),
+            longest: micros(q.longest_us),
+            saving: micros(q.saving_us),
+        }),
+        concurrent: super::upstreams::concurrent(&root),
     }
 }
 
@@ -1028,6 +1127,8 @@ fn flatten(
             .take(50)
             .map(|(at, level, msg)| (micros(*at), *level, msg.clone()))
             .collect(),
+        host: n.host.clone(),
+        timeout: n.timeout,
     });
     for c in &n.children {
         flatten(

@@ -142,10 +142,13 @@ pub enum Tab {
     Mailbox,
     Jobs,
     Sockets,
+    Upstreams,
+    Security,
+    Frontend,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 14] = [
+    pub const ALL: [Tab; 17] = [
         Tab::Overview,
         Tab::Insights,
         Tab::Requests,
@@ -160,6 +163,9 @@ impl Tab {
         Tab::Mailbox,
         Tab::Jobs,
         Tab::Sockets,
+        Tab::Upstreams,
+        Tab::Security,
+        Tab::Frontend,
     ];
 
     pub fn key(self) -> &'static str {
@@ -178,6 +184,9 @@ impl Tab {
             Tab::Mailbox => "mailbox",
             Tab::Jobs => "jobs",
             Tab::Sockets => "sockets",
+            Tab::Upstreams => "upstreams",
+            Tab::Security => "security",
+            Tab::Frontend => "frontend",
         }
     }
 
@@ -201,12 +210,24 @@ impl Tab {
             Tab::Mailbox => "Mailbox",
             Tab::Jobs => "Jobs",
             Tab::Sockets => "Sockets",
+            Tab::Upstreams => "Upstreams",
+            Tab::Security => "Security",
+            Tab::Frontend => "Frontend",
         }
     }
 
     /// Tabs whose context exists in the read-only production view (no logs, schema, tests…).
     pub fn in_read_only(self) -> bool {
-        matches!(self, Tab::Overview | Tab::Requests | Tab::Traces | Tab::Sql)
+        matches!(
+            self,
+            Tab::Overview
+                | Tab::Requests
+                | Tab::Traces
+                | Tab::Sql
+                | Tab::Upstreams
+                | Tab::Security
+                | Tab::Frontend
+        )
     }
 
     /// An item id is well-formed for this tab (a trace id, a fingerprint, a table, a finding, a
@@ -312,6 +333,18 @@ impl Tab {
                 "Is realtime healthy: connections, topics, rates?",
                 "What would I check if clients keep reconnecting?",
             ],
+            (Tab::Upstreams, _) => &[
+                "Which API is making checkout slow?",
+                "Which calls could run concurrently, and what would it save?",
+            ],
+            (Tab::Security, _) => &[
+                "Is anyone attacking this app right now?",
+                "Which of these findings need a fix in the code?",
+            ],
+            (Tab::Frontend, _) => &[
+                "Why are people rage-clicking, and where?",
+                "Which JavaScript errors should I fix first?",
+            ],
         }
     }
 
@@ -348,6 +381,15 @@ impl Tab {
             Tab::Mailbox => "The mail the app sent in development, as shapes and checks.",
             Tab::Jobs => "The job queue: what runs, what fails, and why.",
             Tab::Sockets => "Realtime: connections, topics and message rates.",
+            Tab::Upstreams => {
+                "The APIs the app calls: latency against their SLO, failures, retries, and who calls them."
+            }
+            Tab::Security => {
+                "Attack patterns in the traffic: probes, brute force, credential stuffing, odd clients, and what to do."
+            }
+            Tab::Frontend => {
+                "What people hit in the browser: rage and dead clicks, JavaScript and htmx errors, Web Vitals."
+            }
         }
     }
 
@@ -369,6 +411,9 @@ impl Tab {
             Tab::Mailbox => &["mailers.md", "testing.md"],
             Tab::Jobs => &["jobs.md", "errors-and-logging.md"],
             Tab::Sockets => &["channels.md", "realtime.md"],
+            Tab::Upstreams => &["errors-and-logging.md", "jobs.md", "caching.md"],
+            Tab::Security => &["security.md", "auth.md", "deployment.md"],
+            Tab::Frontend => &["frontend-htmx.md", "views.md", "dev-tools.md"],
         }
     }
 
@@ -412,6 +457,7 @@ pub const GUIDES: &[&str] = &[
     "deployment.md",
     "dev-tools.md",
     "errors-and-logging.md",
+    "frontend-htmx.md",
     "jobs.md",
     "mailers.md",
     "migrations.md",
@@ -1261,6 +1307,8 @@ pub enum Inline {
     Text(String),
     Code(String),
     Strong(String),
+    /// `*emphasis*` (or `_emphasis_`), shown in italics, never with its markers.
+    Em(String),
     /// A framework guide the answer cites: (the text, its public docs URL).
     Guide(String, String),
     /// Evidence the answer cites (`[trace:42]`): its label, the dashboard page that shows it
@@ -1465,6 +1513,16 @@ fn inlines(s: &str, cx: &Cx, charts: &mut Vec<ChartAt>) -> Vec<Inline> {
     while !rest.is_empty() {
         let next_code = rest.find('`');
         let next_strong = rest.find("**");
+        // Single-marker emphasis, when it comes before any code or bold run.
+        if let Some((a, b, m)) = find_em(rest)
+            && next_code.is_none_or(|c| a < c)
+            && next_strong.is_none_or(|s2| a < s2)
+        {
+            text(&rest[..a], cx, charts, &mut out);
+            out.push(Inline::Em(rest[a + 1..b].to_owned()));
+            rest = &rest[b + m.len_utf8()..];
+            continue;
+        }
         match (next_code, next_strong) {
             (Some(c), s2) if s2.is_none_or(|b| c < b) => {
                 text(&rest[..c], cx, charts, &mut out);
@@ -1513,6 +1571,57 @@ fn inlines(s: &str, cx: &Cx, charts: &mut Vec<ChartAt>) -> Vec<Inline> {
         }
     }
     out
+}
+
+/// The first `*word*` or `_word_` emphasis in `s`: (opening marker, closing marker, the marker).
+/// Not a `**`, not inside a word (`snake_case`, `2*3*4`), and closed on the same line.
+fn find_em(s: &str) -> Option<(usize, usize, char)> {
+    let b = s.as_bytes();
+    for (i, &c) in b.iter().enumerate() {
+        if c != b'*' && c != b'_' {
+            continue;
+        }
+        let m = c;
+        let before_ok = i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == m);
+        let next = b.get(i + 1).copied();
+        if !before_ok || next.is_none_or(|n| n == m || n.is_ascii_whitespace()) {
+            continue;
+        }
+        let tail = &s[i + 1..];
+        let line_end = tail.find('\n').unwrap_or(tail.len());
+        let close = tail[..line_end].char_indices().find(|(j, ch)| {
+            *ch == m as char
+                && !tail.as_bytes()[j - 1].is_ascii_whitespace()
+                && tail
+                    .as_bytes()
+                    .get(j + 1)
+                    .is_none_or(|a| !(a.is_ascii_alphanumeric() || *a == m))
+        });
+        if let Some((j, _)) = close.filter(|(j, _)| *j > 0) {
+            return Some((i, i + 1 + j, m as char));
+        }
+    }
+    None
+}
+
+/// `s` cut to `max` characters without leaving a code span or a citation open: a cut inside one
+/// ends before it.
+pub fn truncate_md(s: &str, max: usize) -> String {
+    let cut = crate::kernel::ui::truncate(s, max);
+    if cut == s {
+        return cut;
+    }
+    let body = cut.trim_end_matches('…');
+    let ticks = body.matches('`').count();
+    let open_bracket = body.rfind('[').is_some_and(|o| !body[o..].contains(']'));
+    let end = if ticks % 2 == 1 {
+        body.rfind('`').unwrap_or(body.len())
+    } else if open_bracket {
+        body.rfind('[').unwrap_or(body.len())
+    } else {
+        body.len()
+    };
+    format!("{}…", body[..end].trim_end())
 }
 
 /// **bold** text, with any `code` inside it as code (never raw backticks): the bold runs around
@@ -1811,6 +1920,24 @@ fn code_or_guide(s: &str) -> Inline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn emphasis_renders_without_its_markers_and_cuts_keep_code_closed() {
+        let blocks = render("This is *unrelated* to `snake_case_name` and 2*3*4, _also_ fine.");
+        let Block::Para(p) = &blocks[0] else { panic!() };
+        assert!(p.contains(&Inline::Em("unrelated".into())), "{p:?}");
+        assert!(p.contains(&Inline::Em("also".into())), "{p:?}");
+        assert!(p.contains(&Inline::Code("snake_case_name".into())), "{p:?}");
+        assert!(
+            !p.iter()
+                .any(|i| matches!(i, Inline::Text(t) if t.contains("*unrelated")))
+        );
+        let cut = truncate_md("the wait is in `tokio::time::sleep` inside the handler", 24);
+        assert_eq!(cut.matches('`').count() % 2, 0, "{cut}");
+        assert!(cut.ends_with('…'), "{cut}");
+        let cut = truncate_md("see [trace:12345678] for the slow part", 14);
+        assert!(!cut.contains('['), "{cut}");
+    }
 
     #[test]
     fn the_markdown_subset_parses_into_blocks() {

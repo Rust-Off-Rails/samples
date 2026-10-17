@@ -16,6 +16,9 @@
 //! | Traces and live logs: requests, jobs, mail; method spans | a `tracing-subscriber` layer | `trace.rs` |
 //! | Waterfalls, the traces explorer, methods, hot functions (CPU sampling) | the traces, `pprof` | `waterfall.rs`, `traces_web.rs`, `methods.rs`, `profiler.rs` |
 //! | History on disk: minutes, hours, markers, notable traces | its own SQLite file | `history.rs` |
+//! | Upstreams: the APIs the app calls, a dependency map | `kernel::outbound` (THE way to call an API) | `upstreams.rs` |
+//! | Security: probes, injection, brute force, credential stuffing, odd clients | the request middleware, the auth hook | `threats.rs` |
+//! | Frontend: rage and dead clicks, JS and htmx errors, Web Vitals | a beacon on app pages (`static/dashboard-rum.js`) | `rum.rs` |
 //! | Load lab: fake data, traffic, scenarios | `/dev/dashboard/lab`, `/dev/lab/*`, `app bench` | `lab.rs` |
 //! | Insights, routes explorer, schema | everything above, the catalog, CSP reports | `insights.rs`, `route_explorer.rs`, `schema.rs` |
 //! | Schema diagram (ERD), migrations timeline and drift | the catalog, `seaql_migrations`, `migration/src/*.rs` | `erd.rs`, `migrations.rs` |
@@ -51,12 +54,15 @@ pub mod migrations;
 pub mod panels;
 pub mod profiler;
 pub mod route_explorer;
+pub mod rum;
 pub mod schema;
 pub mod series;
 pub mod sql;
 pub mod testruns;
+pub mod threats;
 pub mod trace;
 pub mod traces_web;
+pub mod upstreams;
 pub mod waterfall;
 pub mod web;
 
@@ -92,6 +98,12 @@ pub struct Hub {
     pub tests: testruns::RunnerState,
     pub github: github::Cache,
     pub insights: insights::InsightState,
+    /// The APIs the app calls (`kernel::outbound` reports each call).
+    pub upstreams: Mutex<upstreams::Upstreams>,
+    /// Security signals from the request stream and the auth hook.
+    pub threats: Mutex<threats::Threats>,
+    /// What browsers reported (`rum.rs`: clicks, errors, Web Vitals).
+    pub rum: Mutex<rum::Rum>,
     /// The address `serve` listens on (`http://127.0.0.1:3000`), for the load lab.
     pub serving: OnceLock<String>,
     /// Resident memory at the collector's first sample ("since boot" on the memory card).
@@ -128,6 +140,9 @@ impl Default for Hub {
             tests: testruns::RunnerState::default(),
             github: github::Cache::default(),
             insights: insights::InsightState::default(),
+            upstreams: Mutex::new(upstreams::Upstreams::default()),
+            threats: Mutex::new(threats::Threats::default()),
+            rum: Mutex::new(rum::Rum::default()),
             serving: OnceLock::new(),
             boot_rss: AtomicU64::new(0),
             storage: Mutex::new(None),
@@ -175,6 +190,9 @@ impl Hub {
         *lock(&self.sql) = sql::SqlStats::default();
         *lock(&self.traces) = trace::Traces::default();
         *lock(&self.logs) = trace::Logs::default();
+        *lock(&self.upstreams) = upstreams::Upstreams::default();
+        *lock(&self.threats) = threats::Threats::default();
+        *lock(&self.rum) = rum::Rum::default();
     }
 
     /// What the dashboard holds, in bytes (shown on Config; bounded by a test).
@@ -189,6 +207,9 @@ impl Hub {
             + lock(&self.sql).approx_bytes()
             + lock(&self.traces).approx_bytes()
             + lock(&self.logs).approx_bytes()
+            + lock(&self.upstreams).approx_bytes()
+            + lock(&self.threats).approx_bytes()
+            + lock(&self.rum).approx_bytes()
             + lock(&profiler::STATE).approx_bytes()
     }
 }
@@ -222,6 +243,13 @@ pub fn instrument(db: DatabaseConnection, config: &Config) -> DatabaseConnection
         ai::allowed(config, false),
         std::sync::atomic::Ordering::Relaxed,
     );
+    // Outbound calls (`kernel::outbound`): their numbers, and the request id as their trace id.
+    crate::kernel::outbound::observe(upstreams::observe);
+    crate::kernel::outbound::trace_ids(upstreams::trace_id);
+    // Security signals: the client address rule (APP_TRUSTED_PROXY), the Host allowlist, and
+    // whether addresses may be shown whole (development) or truncated (production).
+    threats::configure(config);
+    rum::configure(config);
     let mut db = db;
     db.set_metric_callback(sql::record);
     db

@@ -126,6 +126,9 @@ const PAGES: &[&str] = &[
     "/dev/dashboard/routes",
     "/dev/dashboard/traces",
     "/dev/dashboard/methods",
+    "/dev/dashboard/upstreams",
+    "/dev/dashboard/security",
+    "/dev/dashboard/frontend",
     "/dev/dashboard/profile",
     "/dev/dashboard/sql",
     "/dev/dashboard/logs",
@@ -2699,6 +2702,8 @@ async fn every_tool_answers_within_its_cap() {
             "read_source" => json!({ "path": "src/routes.rs", "start_line": 1, "end_line": 40 }),
             "search_source" => json!({ "query": "fn router" }),
             "get_job" | "get_email" => json!({ "id": "1" }),
+            "get_upstream" => json!({ "service": "payments" }),
+            "get_security_event" => json!({ "id": "000000000000" }),
             "propose_action" => {
                 json!({ "kind": "open_page", "target": "/dev/dashboard/sql", "reason": "look" })
             }
@@ -2729,7 +2734,7 @@ async fn every_tool_answers_within_its_cap() {
                 out.text
             );
         }
-        if !["get_job", "get_email"].contains(&t.name) {
+        if !["get_job", "get_email", "get_upstream", "get_security_event"].contains(&t.name) {
             assert!(!out.is_error, "{}: {}", t.name, out.text);
         }
     }

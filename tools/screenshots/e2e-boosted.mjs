@@ -281,6 +281,21 @@ try {
   await follow(other2, verify, "confirm-your-email page (another browser)");
   await reveal(other2, "verify_password", "confirm-your-email page (another browser)");
   await other2.context().close();
+
+  // 6. The dev dashboard's browser beacon, loaded once by the layout, still reports after a boosted
+  // link: the lab widget whose script only binds on a full load is reported as dead clicks.
+  if ((await fetch(`${BASE}/dev/lab/ux`)).ok) {
+    await follow(page, `${BASE}/dev/lab/ux`, "UX trouble page");
+    await click(page, page.locator("#to-widget"), "lab widget (boosted)", { url: /\/dev\/lab\/ux\/widget/ });
+    for (let i = 0; i < 3; i += 1) {
+      await page.locator("#show-code").click();
+      await page.waitForTimeout(1300);
+    }
+    check(await page.locator("#lab-code").isHidden(), "lab widget (boosted): Show stays dead, as planted");
+    await page.waitForTimeout(3500);
+    const frontend = await (await fetch(`${BASE}/dev/dashboard/frontend`)).text();
+    check(/#show-code[\s\S]{0,400}dead[\s\S]{0,400}\/dev\/lab\/ux\/widget/.test(frontend), "beacon: the dead clicks after a boosted link are reported");
+  }
 } finally {
   await browser.close();
 }

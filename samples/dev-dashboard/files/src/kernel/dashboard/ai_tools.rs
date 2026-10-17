@@ -300,9 +300,49 @@ pub const TOOLS: &[ToolDef] = &[
         read_only_view: false,
     },
     ToolDef {
+        name: "list_upstreams",
+        title: "Looking at the APIs the app calls",
+        description: "Every outbound API the app calls through kernel::outbound, slowest p95 first: service, method, route template, host, calls, p50/p95/p99 against its SLO, errors, timeouts, retries, its timeout (NONE when it has none), health, and which app routes call it with the share of their time it takes. Use it for 'which API is making checkout slow?' or 'is an upstream failing?'.",
+        params: none,
+        core: true,
+        read_only_view: true,
+    },
+    ToolDef {
+        name: "get_upstream",
+        title: "Opening an upstream",
+        description: "One outbound API by its service name (e.g. \"payments\", from list_upstreams): each of its routes with calls, percentiles, max, errors, timeouts, retries and timeout; every app route that calls it with the share of that route's time; calls and errors per minute; its slowest calls' traces ([trace:<id>]) and its last failure.",
+        params: || json!({ "type": "object", "required": ["service"], "properties": { "service": { "type": "string", "description": "The service name, e.g. \"payments\"." } } }),
+        core: false,
+        read_only_view: true,
+    },
+    ToolDef {
+        name: "list_security_findings",
+        title: "Looking for attacks",
+        description: "The security detectors' findings over the last 10 minutes, most severe first: scanners and probe paths, path traversal, SQL injection and XSS probes, brute force on one account, credential stuffing from one address, request floods, CSRF rejections, rate-limit hits, odd methods, oversized requests, bad Host headers, CSP spikes, one session used from several addresses. Each has an id, the client address as the page shows it (truncated and hashed in production), detail, what to do, and evidence event ids (for get_security_event) with their traces.",
+        params: none,
+        core: true,
+        read_only_view: true,
+    },
+    ToolDef {
+        name: "get_security_event",
+        title: "Opening a flagged request",
+        description: "One flagged request by its event id (12 hex digits, from list_security_findings): when, the client address as shown, user agent family, method, redacted path, status, which signals it carried, and its trace.",
+        params: || json!({ "type": "object", "required": ["id"], "properties": { "id": { "type": "string", "description": "The event id, 12 hex digits." } } }),
+        core: false,
+        read_only_view: true,
+    },
+    ToolDef {
+        name: "list_frontend_issues",
+        title: "Looking at what people hit in the browser",
+        description: "What the browser beacon reported: rage clicks (3+ clicks within 0.7 s on one element), dead clicks (nothing happened within 1 s) and clicks followed by an error, by element selector and page, with how many came after a boosted (hx-boost) navigation; JavaScript, promise and htmx errors grouped by message with source, counts and pages; Web Vitals per page (LCP, INP, CLS at p75) and slow interactions. Use it for 'why are people rage-clicking?' or 'which JS errors matter?'.",
+        params: none,
+        core: true,
+        read_only_view: true,
+    },
+    ToolDef {
         name: "propose_action",
         title: "Proposing an action",
-        description: "Suggests one action to the developer, shown as a button they may click (nothing runs now): run_scenario (target: a load-lab scenario: n-plus-one, slow-query, slow-endpoint, error-burst, panic, memory-spike) to reproduce a problem; run_tests (target: sqlite, postgres or both); open_page (target: a dashboard path such as /dev/dashboard/sql/<id>). Give a one-sentence reason.",
+        description: "Suggests one action to the developer, shown as a button they may click (nothing runs now): run_scenario (target: a load-lab scenario: n-plus-one, slow-query, slow-endpoint, checkout, error-burst, panic, memory-spike) to reproduce a problem; run_tests (target: sqlite, postgres or both); open_page (target: a dashboard path such as /dev/dashboard/sql/<id>). Give a one-sentence reason.",
         params: || {
             json!({ "type": "object", "required": ["kind", "target", "reason"], "properties": {
             "kind": { "type": "string", "enum": ["run_scenario", "run_tests", "open_page"] },
@@ -419,6 +459,9 @@ pub fn page_label(path: &str) -> String {
                 "mailbox" => "the mailbox",
                 "jobs" => "the jobs",
                 "sockets" => "sockets",
+                "upstreams" => "Upstreams",
+                "security" => "Security",
+                "frontend" => "the Frontend tab",
                 other => other,
             }
         ),
@@ -600,6 +643,23 @@ pub async fn call(state: &AppState, ro: bool, core_only: bool, name: &str, args:
             ctx::app_snapshot(state).await,
             ctx::source_text(state, "sockets").await
         )),
+        "list_upstreams" => Ok(super::upstreams::list_text()),
+        "get_upstream" => match arg_str(args, "service") {
+            Some(s) if s.len() <= 60 => super::upstreams::get_text(s),
+            _ => Err(
+                "`service` must be a service name from list_upstreams, e.g. \"payments\".".into(),
+            ),
+        },
+        "list_security_findings" => Ok(super::threats::list_text(ro)),
+        "get_security_event" => match arg_str(args, "id") {
+            Some(id) if id.len() == 12 && id.bytes().all(|b| b.is_ascii_hexdigit()) => {
+                super::threats::event_text(id)
+            }
+            _ => {
+                Err("`id` must be an event id (12 hex digits) from list_security_findings.".into())
+            }
+        },
+        "list_frontend_issues" => Ok(super::rum::list_text()),
         "propose_action" => {
             return match proposal(args, ro) {
                 Ok(a) => Output {

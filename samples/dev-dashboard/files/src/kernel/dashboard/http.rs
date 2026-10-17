@@ -29,6 +29,10 @@ pub const IGNORED: &[&str] = &[
     "/dev/dashboard",
     "/admin/dashboard",
     "/dev/reload",
+    // The lab's simulated APIs stand for other services: they show as Upstreams, not as routes.
+    "/dev/lab/upstream/",
+    // The browser beacon's reports (production's endpoint; development's is under /dev/dashboard).
+    "/rum",
     "/static/",
     "/favicon.ico",
 ];
@@ -564,10 +568,18 @@ pub async fn middleware(req: Request, next: Next) -> Response {
     }
     let path = req.uri().path();
     if ignored(path) {
-        return QUIET.scope((), next.run(req)).await;
+        // A probe dressed as a static file (`/static/../../etc/passwd`) still counts.
+        let probe = super::threats::inspect(&req, UNMATCHED).filter(|p| p.flags != 0);
+        let path = super::threats::clean_path(path);
+        let res = QUIET.scope((), next.run(req)).await;
+        if let Some(p) = probe {
+            super::threats::finish(p, res.status().as_u16(), &path, 0);
+        }
+        return res;
     }
     let method = method_str(req.method());
     let route = route_of(method, path);
+    let threat = super::threats::inspect(&req, route);
     let request_id = req
         .headers()
         .get("x-request-id")
@@ -591,6 +603,9 @@ pub async fn middleware(req: Request, next: Next) -> Response {
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<u64>().ok());
     finish(&ctx, res.status().as_u16(), len);
+    if let Some(p) = threat {
+        super::threats::finish(p, res.status().as_u16(), &ctx.path, ctx.id);
+    }
     match len {
         Some(_) => res,
         None => count_streamed_bytes(res, method, route),

@@ -164,9 +164,12 @@ pub(super) fn dash(mode: Mode, page: &str, live: Option<String>, refresh: u64) -
         ("Routes", "/routes", false),
         ("Traces", "/traces", true),
         ("Methods", "/methods", true),
+        ("Upstreams", "/upstreams", true),
         ("Hot functions", "/profile", false),
         ("SQL", "/sql", true),
         ("Logs", "/logs", false),
+        ("Security", "/security", true),
+        ("Frontend", "/frontend", true),
         ("Schema", "/schema", false),
         ("Tests", "/tests", false),
         ("GitHub", "/github", false),
@@ -265,6 +268,9 @@ pub fn dev_router() -> Router<AppState> {
         .route("/dev/dashboard/lab/scenario", post(lab_scenario))
         .route("/dev/dashboard/reset", post(reset))
         .route("/dev/csp-reports", post(csp_report))
+        .route("/dev/dashboard/rum", post(super::rum::collect))
+        .route("/dev/dashboard/lab/upstreams", post(lab_upstreams))
+        .route("/dev/dashboard/lab/attack", post(lab_attack))
         .layer(Extension(DEV))
         .merge(lab::demo_router())
         // SECURITY: dashboard data (SQL, logs, traces) never lands in a shared or back/forward
@@ -296,6 +302,9 @@ fn read_routes(r: Router<AppState>, base: &'static str) -> Router<AppState> {
         )
         .route(&p("/traces/{id}/json"), get(super::traces_web::trace_json))
         .route(&p("/methods"), get(super::traces_web::methods_page))
+        .route(&p("/upstreams"), get(super::upstreams::upstreams_page))
+        .route(&p("/security"), get(super::threats::security_page))
+        .route(&p("/frontend"), get(super::rum::frontend_page))
         .route(&p("/sql"), get(sql_page))
         .route(&p("/sql/{id}"), get(sql_show))
         .route(&p("/config"), get(config_page))
@@ -1862,7 +1871,9 @@ async fn dismiss(
 async fn csp_report(body: axum::body::Bytes) -> StatusCode {
     // The global body limit applies; reports are small, and only the first 64 KB are read.
     let n = body.len().min(64 * 1024);
-    insights::record_csp(&body[..n]);
+    if insights::record_csp(&body[..n]) > 0 {
+        super::threats::csp_report();
+    }
     StatusCode::NO_CONTENT
 }
 
@@ -3031,6 +3042,11 @@ struct LabPage {
     records: u64,
     max_rps: u32,
     max_secs: u32,
+    sims: Vec<(&'static str, lab::UpSim)>,
+    presets: &'static [(&'static str, &'static str, &'static str)],
+    attacks: &'static [(&'static str, &'static str, &'static str)],
+    attacking: bool,
+    traceparent: String,
 }
 
 async fn lab_page(
@@ -3065,6 +3081,11 @@ async fn lab_page(
         records,
         max_rps: lab::MAX_RPS,
         max_secs: lab::MAX_SECS,
+        sims: lab::UPSTREAMS.into_iter().zip(lab::sims()).collect(),
+        presets: &lab::PRESETS,
+        attacks: &lab::ATTACKS,
+        attacking: HUB.lab.attacking.load(std::sync::atomic::Ordering::Relaxed),
+        traceparent: lock(&HUB.lab.last_traceparent).clone().unwrap_or_default(),
     })
 }
 
@@ -3143,6 +3164,56 @@ async fn lab_scenario(State(state): State<AppState>, Form(f): Form<ScenarioForm>
     match http::quietly(lab::scenario(&state, s)).await {
         Ok(msg) => back(s.panel(), Flash::notice(msg)),
         Err(e) => back("/dev/dashboard/lab", Flash::alert(e)),
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+struct UpstreamsForm {
+    preset: String,
+    name: String,
+    latency_ms: u64,
+    jitter_ms: u64,
+    error_pct: u32,
+    hang_pct: u32,
+}
+
+/// `POST …/lab/upstreams`: a preset, or one simulated API's latency, jitter, errors and hangs.
+async fn lab_upstreams(Form(f): Form<UpstreamsForm>) -> Response {
+    let to = "/dev/dashboard/lab#lab-upstreams";
+    if !f.preset.is_empty() {
+        return match lab::PRESETS.iter().find(|(k, _, _)| *k == f.preset) {
+            Some((k, label, what)) if lab::preset(k) => back(
+                to,
+                Flash::notice(format!(
+                    "{label}: {what}. Run the Checkout fan-out to see it."
+                )),
+            ),
+            _ => back(to, Flash::alert("No such preset.")),
+        };
+    }
+    if lab::set_sim(&f.name, f.latency_ms, f.jitter_ms, f.error_pct, f.hang_pct) {
+        back(to, Flash::notice(format!("{} updated.", f.name)))
+    } else {
+        back(to, Flash::alert("No such simulated API."))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct AttackForm {
+    kind: String,
+}
+
+/// `POST …/lab/attack`: runs the attack simulator against this app's own address.
+async fn lab_attack(State(state): State<AppState>, Form(f): Form<AttackForm>) -> Response {
+    match lab::start_attack(&state, &f.kind) {
+        Ok(n) => back(
+            "/dev/dashboard/security",
+            Flash::notice(format!(
+                "Attack simulator: {n} requests on their way. Watch this page fill in (reload in a few seconds)."
+            )),
+        ),
+        Err(e) => back("/dev/dashboard/lab#lab-attack", Flash::alert(e)),
     }
 }
 

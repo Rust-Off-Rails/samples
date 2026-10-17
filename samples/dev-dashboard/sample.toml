@@ -1,7 +1,7 @@
 # samples/dev-dashboard/sample.toml: the format is samples/FORMAT.md.
 name = "dev-dashboard"
 version = "0.7.0"
-summary = "/dev/dashboard, an in-process LiveDashboard: live charts (memory, CPU, req/s, p50/p95/p99, errors, DB pool, Tokio), requests per route, traces as waterfalls, SQL fingerprints with N+1 and EXPLAIN, a live log tail, insights, a routes explorer, an interactive schema diagram (ERD) with a migrations timeline and drift checks, an optional bring-your-own-key AI assistant, test runs and CI, and a load lab. Development only; a read-only subset for admins in production."
+summary = "/dev/dashboard, an in-process LiveDashboard: live charts (memory, CPU, req/s, p50/p95/p99, errors, DB pool, Tokio), requests per route, traces as waterfalls, SQL fingerprints with N+1 and EXPLAIN, a live log tail, insights, a routes explorer, an interactive schema diagram (ERD) with a migrations timeline and drift checks, an optional bring-your-own-key AI assistant, test runs and CI, a load lab, Upstreams (the APIs the app calls through its outbound wrapper, with a dependency map), Security (attack and abuse detectors with an attack simulator) and Frontend (rage and dead clicks, JS errors and Web Vitals from a browser beacon). Development only; a read-only subset for admins in production."
 depends_on = []
 extracted_from = "Rust off Rails apps"
 
@@ -21,6 +21,7 @@ file = "src/kernel/mod.rs"
 anchor = "kernel mods"
 text = '''
 pub mod dashboard;
+pub mod outbound;
 '''
 
 [[wire]]
@@ -113,6 +114,12 @@ pub struct DashboardConfig {
     /// the Hot functions page starts and stops it); `always`: sampling from boot.
     pub profiler: bool,
     pub profiler_at_boot: bool,
+    /// `DASHBOARD_RUM=true|false`: the browser beacon (rage and dead clicks, JS errors, Web
+    /// Vitals). Unset: on in development, off in production (it also needs the read-only view).
+    pub rum: Option<bool>,
+    /// `DASHBOARD_RUM_SAMPLE=0.1`: the share of page views that load the beacon (0 to 1; unset:
+    /// all in development, 0.1 in production).
+    pub rum_sample: Option<f64>,
     /// The optional "Ask AI" assistant (`DASHBOARD_AI_*`).
     pub ai: DashboardAi,
 }
@@ -152,6 +159,8 @@ impl Default for DashboardConfig {
             storage_dir: test_storage().display().to_string(),
             profiler: true,
             profiler_at_boot: false,
+            rum: None,
+            rum_sample: None,
             ai: DashboardAi::default(),
         }
     }
@@ -203,6 +212,25 @@ impl DashboardConfig {
                 (true, false)
             }
         };
+        let rum = match get("DASHBOARD_RUM").as_deref() {
+            None => None,
+            Some("true") | Some("1") => Some(true),
+            Some("false") | Some("0") => Some(false),
+            Some(_) => {
+                invalid.push("DASHBOARD_RUM (expected true or false)");
+                None
+            }
+        };
+        let rum_sample = match get("DASHBOARD_RUM_SAMPLE") {
+            None => None,
+            Some(v) => match v.trim().parse::<f64>() {
+                Ok(f) if (0.0..=1.0).contains(&f) => Some(f),
+                _ => {
+                    invalid.push("DASHBOARD_RUM_SAMPLE (a share of page views, 0 to 1)");
+                    None
+                }
+            },
+        };
         let ai = DashboardAi::from_env(&get, &mut invalid);
         if !invalid.is_empty() {
             anyhow::bail!("invalid env vars: {} (see .env.example)", invalid.join(", "));
@@ -229,6 +257,8 @@ impl DashboardConfig {
                 .unwrap_or_else(|| "storage/dashboard".to_owned()),
             profiler,
             profiler_at_boot,
+            rum,
+            rum_sample,
             ai,
         })
     }
@@ -581,6 +611,8 @@ impl fmt::Debug for DashboardConfig {
             .field("storage_dir", &self.storage_dir)
             .field("profiler", &self.profiler)
             .field("profiler_at_boot", &self.profiler_at_boot)
+            .field("rum", &self.rum)
+            .field("rum_sample", &self.rum_sample)
             .field("ai", &self.ai)
             .finish()
     }
@@ -618,6 +650,12 @@ if crate::kernel::dashboard::access::admin_mounted(&config) {
                 _,
             >(state.clone()),
         ),
+    );
+    // The browser beacon's endpoint (DASHBOARD_RUM=true in production; development posts to
+    // /dev/dashboard/rum). It answers 404 unless the beacon is on.
+    app = app.route(
+        "/rum",
+        axum::routing::post(crate::kernel::dashboard::rum::collect),
     );
 }
 '''
@@ -665,6 +703,11 @@ text = '''
 ("GET",  "/dev/dashboard/traces/{id}/waterfall",  "traces_web::waterfall_fragment", Access::Dev),
 ("GET",  "/dev/dashboard/traces/{id}/json",       "traces_web::trace_json", Access::Dev),
 ("GET",  "/dev/dashboard/methods",                "traces_web::methods_page", Access::Dev),
+("GET",  "/dev/dashboard/upstreams",              "upstreams::upstreams_page", Access::Dev),
+("GET",  "/dev/dashboard/security",               "threats::security_page", Access::Dev),
+("GET",  "/dev/dashboard/frontend",               "rum::frontend_page", Access::Dev),
+("POST", "/dev/dashboard/rum",                    "rum::collect",      Access::Dev),
+("POST", "/rum",                                  "rum::collect",      Access::Public),
 ("GET",  "/dev/dashboard/profile",                "traces_web::profile_page", Access::Dev),
 ("POST", "/dev/dashboard/profile/toggle",         "traces_web::profile_toggle", Access::Dev),
 ("GET",  "/dev/dashboard/sql",                    "web::sql_page",     Access::Dev),
@@ -695,6 +738,8 @@ text = '''
 ("POST", "/dev/dashboard/lab/traffic",            "web::lab_traffic",  Access::Dev),
 ("POST", "/dev/dashboard/lab/stop",               "web::lab_stop",     Access::Dev),
 ("POST", "/dev/dashboard/lab/scenario",           "web::lab_scenario", Access::Dev),
+("POST", "/dev/dashboard/lab/upstreams",          "web::lab_upstreams", Access::Dev),
+("POST", "/dev/dashboard/lab/attack",             "web::lab_attack",   Access::Dev),
 ("GET",  "/dev/dashboard/config",                 "web::config_page",  Access::Dev),
 ("GET",  "/dev/dashboard/stream",                 "web::stream",       Access::Dev),
 ("POST", "/dev/dashboard/reset",                  "web::reset",        Access::Dev),
@@ -705,6 +750,15 @@ text = '''
 ("GET",  "/dev/lab/slow",                         "lab::slow",         Access::Dev),
 ("GET",  "/dev/lab/panic",                        "lab::panic",        Access::Dev),
 ("GET",  "/dev/lab/error",                        "lab::error",        Access::Dev),
+("GET",  "/dev/lab/checkout",                     "lab::checkout",     Access::Dev),
+("GET",  "/dev/lab/upstream/{name}/{action}",     "lab::upstream",     Access::Dev),
+("POST", "/dev/lab/upstream/{name}/{action}",     "lab::upstream",     Access::Dev),
+("GET",  "/dev/lab/upstream/{name}/{action}/{id}", "lab::upstream_item", Access::Dev),
+("GET",  "/dev/lab/sign-in",                      "lab::sign_in_form", Access::Dev),
+("POST", "/dev/lab/sign-in",                      "lab::sign_in",      Access::Dev),
+("GET",  "/dev/lab/ux",                           "lab::ux",           Access::Dev),
+("GET",  "/dev/lab/ux/widget",                    "lab::ux_widget",    Access::Dev),
+("GET",  "/dev/lab/ux/slow",                      "lab::ux_slow",      Access::Dev),
 ("GET",  "/admin/dashboard",                      "web::overview",     Access::Admin),
 ("GET",  "/admin/dashboard/charts",               "web::charts_page",  Access::Admin),
 ("GET",  "/admin/dashboard/requests",             "web::requests_page", Access::Admin),
@@ -715,6 +769,9 @@ text = '''
 ("GET",  "/admin/dashboard/traces/{id}/waterfall", "traces_web::waterfall_fragment", Access::Admin),
 ("GET",  "/admin/dashboard/traces/{id}/json",     "traces_web::trace_json", Access::Admin),
 ("GET",  "/admin/dashboard/methods",              "traces_web::methods_page", Access::Admin),
+("GET",  "/admin/dashboard/upstreams",            "upstreams::upstreams_page", Access::Admin),
+("GET",  "/admin/dashboard/security",             "threats::security_page", Access::Admin),
+("GET",  "/admin/dashboard/frontend",             "rum::frontend_page", Access::Admin),
 ("GET",  "/admin/dashboard/sql",                  "web::sql_page",     Access::Admin),
 ("GET",  "/admin/dashboard/sql/{id}",             "web::sql_show",     Access::Admin),
 ("GET",  "/admin/dashboard/config",               "web::config_page",  Access::Admin),
@@ -874,6 +931,9 @@ DASHBOARD_IN_PRODUCTION=false
 # DASHBOARD_STORAGE_DIR=storage/dashboard  # the dashboard's own files (history, past Ask AI runs)
 # DASHBOARD_HISTORY_PATH=storage/dashboard/history.sqlite3
 # DASHBOARD_PROFILER=true                  # development, Linux/macOS: Hot functions starts CPU sampling (always: from boot; false: never)
+# The browser beacon (Frontend tab: rage/dead clicks, JS errors, Web Vitals): on in development.
+# DASHBOARD_RUM=false                      # production: true (needs DASHBOARD_IN_PRODUCTION); POSTs to /rum
+# DASHBOARD_RUM_SAMPLE=0.1                 # the share of page views that load it (production default 0.1)
 # "Ask AI" on the dashboard (optional, your own key; development only unless DASHBOARD_AI_IN_PRODUCTION).
 # DASHBOARD_AI_PROVIDER=anthropic          # or openai-compatible (OpenAI, Ollama, LM Studio, a gateway)
 # DASHBOARD_AI_API_KEY=                    # never shown, logged or stored; optional for a local model
@@ -903,6 +963,7 @@ DASHBOARD_IN_PRODUCTION=false
 file = "tests/app/main.rs"
 anchor = "test mods"
 text = '''
+mod dev_dashboard_signals_test;
 mod dev_dashboard_test;
 '''
 
@@ -935,6 +996,9 @@ text = '''
 "/dev/dashboard/routes",
 "/dev/dashboard/traces",
 "/dev/dashboard/methods",
+"/dev/dashboard/upstreams",
+"/dev/dashboard/security",
+"/dev/dashboard/frontend",
 "/dev/dashboard/profile",
 "/dev/dashboard/sql",
 "/dev/dashboard/logs",
@@ -949,6 +1013,38 @@ text = '''
 "/dev/dashboard/config",
 "/admin/dashboard",
 "/dev/lab/orders",
+'''
+
+# The browser beacon on every app page (rum.rs): its digested URL and this page's request id.
+[[wire]]
+file = "src/views/mod.rs"
+anchor = "ctx fields"
+text = '''
+/// The dev dashboard's browser beacon (`kernel/dashboard/rum.rs`); `None` when it's off.
+pub dashboard_rum: Option<crate::kernel::dashboard::rum::Beacon>,
+'''
+
+[[wire]]
+file = "src/controllers/application.rs"
+anchor = "ctx init"
+text = '''
+dashboard_rum: crate::kernel::dashboard::rum::beacon(state, &parts.headers),
+'''
+
+[[wire]]
+file = "templates/layouts/application.html"
+anchor = "app head"
+text = '''
+{% if let Some(rum) = ctx.dashboard_rum %}<script src="{{ rum.src }}" data-rum="{{ rum.endpoint }}" data-rid="{{ rum.rid }}" defer></script>{% endif %}
+'''
+
+# With auth-core: every audit event feeds the brute-force and credential-stuffing detectors.
+[[wire]]
+file = "src/models/auth_event.rs"
+anchor = "auth events"
+when = "auth-core"
+text = '''
+crate::kernel::dashboard::threats::auth_event(&format!("{kind:?}"), user_id, meta.ip.as_deref());
 '''
 
 # With auth-core: the read-only production view's admins are accounts (accounts.rs).

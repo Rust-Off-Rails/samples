@@ -513,3 +513,49 @@ tr.current { background: var(--accent-bg); }
   .cc-box { flex-direction: column; }
   .cc-box .btn { min-height: 40px; }
 }
+
+/* Upstreams: the dependency map (server-rendered SVG) and the table. */
+:root {
+  /* APP: the security timeline's categories. */
+  --sec-probe: light-dark(#7c3aed, #c4b5fd);
+  --sec-injection: light-dark(#be123c, #fda4af);
+  --sec-auth: light-dark(#b45309, #fcd34d);
+  --sec-abuse: light-dark(#0369a1, #7dd3fc);
+}
+.h-ok { --h: var(--d-ok); } .h-warn { --h: var(--d-warn); } .h-err { --h: var(--d-err); }
+.sw.h-ok, .sw.h-warn, .sw.h-err { display: inline-block; width: .7rem; height: .7rem; border-radius: 3px; background: var(--h); vertical-align: middle; }
+.up-map-wrap { overflow-x: auto; }
+.up-map { display: block; width: 100%; max-width: 980px; min-width: 560px; height: auto; margin: 0 auto; }
+.up-edge { fill: none; stroke: var(--h); stroke-opacity: .55; stroke-linecap: round; }
+.up-node { fill: var(--panel); stroke: var(--h, var(--s1)); stroke-width: 1.5; }
+.up-node.route { stroke: var(--s1); }
+.up-map a:hover .up-node, .up-map a:focus .up-node { fill: var(--hover); stroke-width: 2.5; }
+.up-map a:focus { outline: none; }
+.up-map a:focus-visible .up-node { stroke: var(--accent); stroke-width: 3; }
+.up-label { fill: var(--fg); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.up-sub { fill: var(--muted); font-size: 10px; }
+.up-legend .sw { margin-right: .3rem; }
+.up-legend { list-style: none; margin: .5rem 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: .4rem 1rem; font-size: .8rem; color: var(--muted); }
+.up-text { margin-top: .5rem; font-size: .85rem; }
+.up-table .badge { font-size: .7rem; }
+.sim-form { flex-wrap: nowrap; align-items: center; }
+.sim-form input { width: 5.5rem; }
+
+/* Security: the timeline. */
+.sec-probe { --c: var(--sec-probe); } .sec-injection { --c: var(--sec-injection); }
+.sec-auth { --c: var(--sec-auth); } .sec-abuse { --c: var(--sec-abuse); }
+.sec-tl { display: block; }
+.sec-tl rect { fill: var(--c); }
+.sec-tl .sec-base { stroke: var(--d-grid); }
+.sw.sec-probe, .sw.sec-injection, .sw.sec-auth, .sw.sec-abuse { display: inline-block; width: .7rem; height: .7rem; border-radius: 3px; background: var(--c); vertical-align: middle; }
+.sec-axis { display: flex; justify-content: space-between; margin-top: .25rem; }
+.badge.verdict { font-size: .9rem; }
+.finding h3 { margin: 0; font-size: 1rem; }
+.sec-ev { margin-top: .4rem; }
+
+/* Frontend. */
+.dbar.heat rect { fill: var(--d-err); }
+.fe-errors { list-style: none; margin: 0; padding: 0; }
+.fe-err { padding: .6rem 1rem; border-top: 1px solid var(--border); }
+.fe-err:first-child { border-top: 0; }
+.fe-err p { margin: .2rem 0; overflow-wrap: anywhere; }

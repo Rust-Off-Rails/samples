@@ -67,6 +67,10 @@ pub struct TraceQuery {
     #[serde(rename = "fn")]
     pub method: Option<String>,
     pub notable: Option<String>,
+    /// An outbound API the trace called (its service name, `payments`).
+    pub upstream: Option<String>,
+    /// The request id (a browser's report links to the trace of its page or fetch).
+    pub rid: Option<String>,
     /// Unix minute (a click on a chart).
     pub minute: Option<i64>,
     pub all: Option<String>,
@@ -125,6 +129,16 @@ impl TraceQuery {
             && (!self.n_plus_one() || !t.n_plus_one.is_empty())
             && (!Self::on(&self.err) || t.status >= 500)
             && (!Self::on(&self.notable) || t.notable())
+            && nonempty(&self.upstream).is_none_or(|u| {
+                t.spans.iter().any(|s| {
+                    s.name == "http"
+                        && s.fields.split(' ').any(|kv| {
+                            kv.strip_prefix("service=")
+                                .is_some_and(|v| v.trim_matches('"') == u)
+                        })
+                })
+            })
+            && nonempty(&self.rid).is_none_or(|r| t.request_id == r)
             && nonempty(&self.q).is_none_or(|q| {
                 t.path.to_lowercase().contains(&q.to_lowercase())
                     || t.route.to_lowercase().contains(&q.to_lowercase())
@@ -163,6 +177,8 @@ impl TraceQuery {
         put("q", self.q.clone());
         put("fn", self.method.clone());
         put("notable", self.notable.clone());
+        put("upstream", self.upstream.clone());
+        put("rid", self.rid.clone());
         put("minute", self.minute.map(|v| v.to_string()));
         parts.join("&")
     }
@@ -175,7 +191,12 @@ pub fn select(q: &TraceQuery, limit: usize) -> Vec<Arc<Trace>> {
     let mem: Vec<Arc<Trace>> = lock(&HUB.traces).list(false);
     let mut out: Vec<Arc<Trace>> = mem.iter().filter(|t| q.matches(t, now)).cloned().collect();
     out.truncate(limit);
-    if out.len() < limit && history::is_open() && q.method.as_deref().is_none_or(str::is_empty) {
+    if out.len() < limit
+        && history::is_open()
+        && q.method.as_deref().is_none_or(str::is_empty)
+        && q.upstream.as_deref().is_none_or(str::is_empty)
+        && q.rid.as_deref().is_none_or(str::is_empty)
+    {
         let (from, to) = q.window(now);
         let disk = history::traces(history::TraceFilter {
             from,

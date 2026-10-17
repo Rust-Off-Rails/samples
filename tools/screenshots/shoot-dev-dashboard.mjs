@@ -75,6 +75,37 @@ const ensureTraffic = async () => {
 // Hot functions sample on demand: start it now, so the profile screens have 15 minutes to fill.
 await fetch(`${BASE}/dev/dashboard/profile/toggle`, { method: "POST", body: new URLSearchParams({ paused: "0" }), redirect: "manual" });
 
+// The signals (Upstreams, Security, Frontend): slow and flaky simulated APIs and a dozen
+// checkouts, the attack simulator's every run, and the UX trouble page playing itself in a real
+// browser (its deliberate errors happen in that context, which is not shot).
+const post = (path, form) => fetch(`${BASE}${path}`, { method: "POST", body: new URLSearchParams(form), redirect: "manual" });
+const prepareSignals = async () => {
+  await post("/dev/dashboard/lab/upstreams", { preset: "reset" });
+  await post("/dev/dashboard/lab/upstreams", { preset: "slow-payments" });
+  await post("/dev/dashboard/lab/upstreams", { preset: "flaky-shipping" });
+  for (let i = 0; i < 4; i++) for (const mode of ["sequential", "parallel"]) await fetch(`${BASE}/dev/lab/checkout?mode=${mode}`);
+  await post("/dev/dashboard/lab/upstreams", { preset: "timeouts" });
+  for (let i = 0; i < 3; i++) await fetch(`${BASE}/dev/lab/checkout?mode=retry`);
+  await post("/dev/dashboard/lab/attack", { kind: "all" });
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await ctx.newPage();
+  await page.goto(`${BASE}/dev/lab/ux?simulate=1`, { waitUntil: "load" });
+  await page.waitForURL(/\/dev\/lab\/ux\/widget/, { timeout: 30_000 });
+  await page.waitForTimeout(9_000);
+  await page.goto(`${BASE}/dev/lab/ux`, { waitUntil: "load" });
+  await page.waitForTimeout(1_000);
+  await ctx.close();
+  // The attack simulator sends 50 requests a second.
+  await new Promise((r) => setTimeout(r, 6_000));
+};
+// The trace of a fresh checkout (its page links to its waterfall).
+const checkoutTrace = async (p, mode) => {
+  await p.goto(`${BASE}/dev/lab/checkout?mode=${mode}`, { waitUntil: "load" });
+  const href = await p.locator("a[href^='/dev/dashboard/traces/']").first().getAttribute("href");
+  if (!href) throw new Error("no checkout trace");
+  return href;
+};
+
 const screens = [
   // The overview opens with the AI command center (expanded): without a key here, with the mock
   // in "overview-ai" (the AI server's proactive mode writes the briefing on its first visit).
@@ -201,6 +232,22 @@ const screens = [
     await page.locator(".ai-bar > summary").click();
     await page.locator(".ai-bar [data-ai-form]").waitFor();
   }, { base: AI_BASE }],
+  ["fanout-sequential", async (p) => {
+    await post("/dev/dashboard/lab/upstreams", { preset: "reset" });
+    await post("/dev/dashboard/lab/upstreams", { preset: "slow-payments" });
+    return checkoutTrace(p, "sequential");
+  }, async (page) => { await page.locator(".wf-summary").first().evaluate((el) => el.scrollIntoView({ block: "start" })); }],
+  ["fanout-parallel", async (p) => {
+    await post("/dev/dashboard/lab/upstreams", { preset: "timeouts" });
+    return checkoutTrace(p, "retry");
+  }, async (page) => { await page.locator(".wf-toolbar").first().evaluate((el) => el.scrollIntoView({ block: "start" })); }],
+  ["upstreams", async () => "/dev/dashboard/upstreams", async (page) => { await page.locator(".dash-head").first().evaluate((el) => el.scrollIntoView({ block: "start" })); }],
+  ["security", async () => "/dev/dashboard/security", async (page) => { await page.locator(".dash-head").first().evaluate((el) => el.scrollIntoView({ block: "start" })); }],
+  ["frontend", async () => "/dev/dashboard/frontend", async (page) => { await page.locator(".dash-head").first().evaluate((el) => el.scrollIntoView({ block: "start" })); }],
+  ["insights-signals", async () => "/dev/dashboard/insights", async (page) => {
+    const f = page.locator(".finding", { hasText: "Slow upstream" }).first();
+    if (await f.count()) await f.scrollIntoViewIfNeeded();
+  }],
   ["tests", async () => "/dev/dashboard/tests"],
   ["github", async () => "/dev/dashboard/github"],
   ["config", async () => "/dev/dashboard/config"],
@@ -219,6 +266,7 @@ let violations = 0;
 let problems = 0;
 try {
   mkdirSync(OUT, { recursive: true });
+  if (!only.length || only.some((n) => ["fanout-sequential", "fanout-parallel", "upstreams", "security", "frontend", "insights-signals", "insights"].includes(n))) await prepareSignals();
   for (const [screen, resolve, act, opt = {}] of screens) {
     if (only.length && !only.includes(screen)) continue;
     if (opt.base === "") { console.log(`skip ${screen}: no AI_BASE`); continue; }

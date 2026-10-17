@@ -242,6 +242,12 @@ pub async fn findings(state: &AppState) -> Vec<Finding> {
     }
     memory_and_pool(&mut out);
     csp(&mut out);
+    {
+        let traces = lock(&HUB.traces).list(false);
+        out.extend(super::upstreams::findings(&traces));
+    }
+    out.extend(super::threats::findings());
+    out.extend(super::rum::findings());
     let db = &state.db;
     let tables = schema::tables(db).await.unwrap_or_default();
     schema_rules(&tables, &mut out);

@@ -97,6 +97,9 @@ pub async fn build(
         (Tab::Jobs, Some("errors")) => Ok(job_errors(state, 15).await),
         (Tab::Jobs, Some(id)) => job(state, id).await,
         (Tab::Sockets, _) => Ok(sockets(state).await),
+        (Tab::Upstreams, _) => Ok(super::upstreams::list_text()),
+        (Tab::Security, _) => Ok(super::threats::list_text(ro)),
+        (Tab::Frontend, _) => Ok(super::rum::list_text()),
     }
 }
 

@@ -96,6 +96,12 @@
 .grp .wf-track .bar { opacity: .9; }
 .flagged .wf-track .bar { fill: var(--wf-warn); }
 .failed .wf-track .bar { fill: var(--wf-err); }
+/* Outbound HTTP: the API's host as a chip; a timeout in red, striped. */
+.timeout .wf-track .bar { fill: var(--wf-err); stroke: var(--wf-err); stroke-dasharray: 3 2; fill-opacity: .55; }
+.wf-host { margin-left: .4rem; padding: 0 .35rem; border: 1px solid var(--k-http); border-radius: 4px; font-size: .7rem; color: var(--fg); white-space: nowrap; }
+.wf-to { margin-left: .35rem; }
+.wf-seq .small { margin: .25rem 0 0; overflow-wrap: anywhere; }
+.wf-par { margin: 0; }
 .crit .wf-track .bar { stroke: var(--wf-crit); stroke-width: 1px; stroke-opacity: .55; }
 .wf-track .gap { stroke: var(--k-other); stroke-width: 1px; }
 .hatch-bg { fill: transparent; } .hatch { stroke: var(--k-other); stroke-width: 2.5; }
