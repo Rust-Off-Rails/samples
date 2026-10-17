@@ -181,10 +181,10 @@ check_wire() {
       echo "refuse $1: wiring target $2 doesn't exist in the app" >&2
       problems=$((problems + 1))
     fi
-  elif ! grep -q "samples: $3\$" "$app/$2" && ! grep -q "samples: $3 " "$app/$2"; then
+  elif ! grep -qE "samples: $3[[:space:]]*(#\}|\*/|-->)?[[:space:]]*\$" "$app/$2"; then
     echo "refuse $1: $2 has no 'samples: $3' anchor; apply this wiring by hand (README.md, Wiring)" >&2
     problems=$((problems + 1))
-  elif ! grep -E "samples: $3( |\$)" "$app/$2" | grep -qE '^[[:space:]]*(//|\{#|#|/\*)'; then
+  elif ! grep -E "samples: $3[[:space:]]*(#\}|\*/|-->)?[[:space:]]*\$" "$app/$2" | grep -qE '^[[:space:]]*(//|\{#|#|/\*|<!--)'; then
     # WHY: an anchor trailing code (`} // samples: x`, as rustfmt may leave it) would put the
     # insertion inside that code.
     echo "refuse $1: the 'samples: $3' anchor in $2 shares its line with code; move it onto its own line" >&2
@@ -224,16 +224,24 @@ done
 
 # insert_at <file> <anchor> <text-file>: the text's lines above the anchor line, with its indent.
 # Idempotent: when the text's lines already appear together in the file, nothing is inserted.
+# The anchor matches exactly: `samples: routes` is not `samples: routes table`; after it, only the
+# end of the line or the comment's close (`#}`, `*/`, `-->`).
 insert_at() {
   awk -v anchor="samples: $2" -v textf="$3" '
     function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+    function is_anchor(line,   at, rest) {
+      at = index(line, anchor)
+      if (!at) return 0
+      rest = trim(substr(line, at + length(anchor)))
+      return rest == "" || rest == "#}" || rest == "*/" || rest == "-->"
+    }
     BEGIN {
       while ((getline t < textf) > 0) { text[++tn] = t; if (trim(t) != "") want = want trim(t) "\n" }
       close(textf)
     }
     FNR == NR { if (trim($0) != "") have = have trim($0) "\n"; next }
     FNR == 1 { present = (want == "" || index(have, want) > 0) }
-    !done && !present && (index($0, anchor " ") || substr($0, length($0) - length(anchor) + 1) == anchor) {
+    !done && !present && is_anchor($0) {
       indent = $0; sub(/[^ \t].*$/, "", indent)
       for (i = 1; i <= tn; i++) print (trim(text[i]) == "" ? "" : indent text[i])
       done = 1

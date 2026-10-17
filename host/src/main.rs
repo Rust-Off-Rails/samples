@@ -72,6 +72,9 @@ async fn main() -> anyhow::Result<()> {
     }
 
     match cli.command.unwrap_or(Command::Serve) {
+        // WHY at the top: an anchor after the last arm ends up on that arm's `}` once rustfmt has
+        // formatted a block arm above it, and later installs refuse to wire there.
+        // samples: cli dispatch
         Command::Serve => serve(config).await,
         Command::Db { command } => db_command(config, command).await,
         Command::Routes => print_routes(),
@@ -81,7 +84,6 @@ async fn main() -> anyhow::Result<()> {
             tasks::run(&state, &name, args).await
         }
         Command::Introspect => introspect(config).await,
-        // samples: cli dispatch
     }
 }
 

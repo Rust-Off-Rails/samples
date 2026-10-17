@@ -5,7 +5,8 @@
 #   - the same diamond with base already installed is not a cycle (the false "dependency cycle"
 #     when a sample listed both mailer and dev-mailbox);
 #   - a real cycle is still refused;
-#   - an optional wire (`when = "<sample>"`) waits until that sample is installed, in either order.
+#   - an optional wire (`when = "<sample>"`) waits until that sample is installed, in either order;
+#   - an anchor matches exactly (`samples: routes` never matches `samples: routes table`).
 # tools/ci.sh runs it first. Exit status: 0 when every check passed.
 set -eu
 
@@ -100,6 +101,23 @@ install dep
 install opt
 check "an optional wire applies when its sample is already in" "yes" "$(wired)"
 check "and only once" "1" "$(grep -c "wired for dep" "$tmp/app/src/x.rs")"
+
+# Exact anchors: `routes` must land above `samples: routes`, not above `samples: routes table`.
+sample exact
+cat >> "$tmp/samples/exact/sample.toml" <<'TOML'
+
+[[wire]]
+file = "src/r.rs"
+anchor = "routes"
+text = '''
+// a route
+'''
+TOML
+app
+mkdir -p "$tmp/app/src"
+printf '// samples: routes table\n// samples: routes\n{# samples: routes #}\n' > "$tmp/app/src/r.rs"
+install exact
+check "an anchor matches exactly, not as a prefix" "2" "$(grep -n "a route" "$tmp/app/src/r.rs" | cut -d: -f1)"
 
 [ "$failed" = 0 ] || { echo "install-test: $failed check(s) failed" >&2; exit 1; }
 echo "install-test: all checks passed"
