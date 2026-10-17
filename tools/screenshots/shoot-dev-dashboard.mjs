@@ -25,6 +25,23 @@ const throttle = async () => {
   while (minute().length >= 5) await new Promise((r) => setTimeout(r, 2_000));
   runsAt.push(Date.now());
 };
+// Clicks Investigate (or Generate health summary) in `scope` and waits for the run to start; the
+// AI server's watcher spends from the same per-minute budget, so a "a minute" refusal waits and
+// retries.
+const startRun = async (page, scope) => {
+  for (let i = 0; i < 6; i++) {
+    await throttle();
+    await page.locator(`${scope} [data-ai-send]`).click();
+    await page.locator(`${scope} .ai-run`).first().waitFor({ timeout: 30_000 });
+    const refused = await page.locator(`${scope} .ai-run [role=alert]`).count();
+    if (!refused) return;
+    const text = await page.locator(`${scope} .ai-run [role=alert]`).first().textContent();
+    if (!/a minute/.test(text ?? "")) throw new Error(`run refused: ${text}`);
+    await new Promise((r) => setTimeout(r, 20_000));
+  }
+  throw new Error("the run never started");
+};
+
 // The AI server is a second process with its own numbers: give it traffic too (and an N+1, so its
 // watcher posts an incident).
 let aiTrafficUntil = 0;
@@ -97,16 +114,14 @@ const screens = [
     await page.locator("#incidents").scrollIntoViewIfNeeded();
   }, { base: AI_BASE }],
   ["ai-health", async () => "/dev/dashboard", async (page) => {
-    await throttle();
-    await page.locator("#health [data-ai-send]").click();
+    await startRun(page, "#health");
     await page.locator("#health .ai-end .ai-text").waitFor({ timeout: 90_000 });
     await page.locator("#health").scrollIntoViewIfNeeded();
   }, { base: AI_BASE }],
   ["ai-run-live", async () => "/dev/dashboard/sql", async (page) => {
     await page.locator("[data-ai-panel] > summary").click();
     await page.locator("[data-ai-prompt]").first().click();
-    await throttle();
-    await page.locator("[data-ai-send]").click();
+    await startRun(page, "[data-ai-panel]");
     await page.locator(".ai-run .ai-step").nth(2).waitFor({ timeout: 60_000 });
     const href = await page.locator(".ai-run .ai-permalink").getAttribute("href");
     if (href) lastRun = href;
@@ -120,8 +135,7 @@ const screens = [
   ["ai-mailbox", async () => "/dev/mailbox", async (page) => {
     await page.locator(".ai-bar > summary").click();
     await page.locator(".ai-bar [data-ai-prompt]").first().click();
-    await throttle();
-    await page.locator(".ai-bar [data-ai-send]").click();
+    await startRun(page, ".ai-bar");
     await page.locator(".ai-bar .ai-end .ai-text").waitFor({ timeout: 60_000 });
     await page.locator(".ai-bar").scrollIntoViewIfNeeded();
   }, { base: AI_BASE }],
