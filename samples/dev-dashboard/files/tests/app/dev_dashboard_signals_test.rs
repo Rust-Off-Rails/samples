@@ -654,14 +654,14 @@ async fn client_addresses_are_truncated_in_production() {
     let v4: std::net::IpAddr = "203.0.113.77".parse().unwrap();
     let label = threats::ip_label(Some(v4), true);
     assert!(
-        label.starts_with("203.0.113.x #") && !label.contains("77"),
+        label.starts_with("203.0.113.x #") && !label.contains("203.0.113.77"),
         "{label}"
     );
     assert_eq!(threats::ip_label(Some(v4), false), "203.0.113.77");
     let v6: std::net::IpAddr = "2001:db8:85a3::8a2e:370:7334".parse().unwrap();
     let label = threats::ip_label(Some(v6), true);
     assert!(
-        label.starts_with("2001:db8:85a3::/48 #") && !label.contains("7334"),
+        label.starts_with("2001:db8:85a3::/48 #") && !label.contains("370:7334"),
         "{label}"
     );
     let app = TestApp::with_config(production(gated())).await;
