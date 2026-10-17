@@ -16,12 +16,13 @@ use axum::middleware::from_fn;
 use axum::routing::{get, post};
 use base64::Engine;
 use http_body_util::BodyExt;
-use offrails_host::config::{AppEnv, Config, DashboardConfig};
+use offrails_host::config::{AiProvider, AppEnv, Config, DashboardAi, DashboardConfig};
 use offrails_host::kernel::dashboard::lab::{self, Plan};
 use offrails_host::kernel::dashboard::route_explorer::{self as rx, RouteDef};
 use offrails_host::kernel::dashboard::trace::DashboardLayer;
 use offrails_host::kernel::dashboard::{
-    self, HUB, collector, github, http, insights, lock, schema, sql, testruns,
+    self, HUB, ai, ai_context, collector, github, http, insights, lock, migrations, schema, sql,
+    testruns,
 };
 use offrails_host::routes::Access;
 use offrails_host::state::AppState;
@@ -1285,6 +1286,7 @@ async fn the_schema_browser_never_shows_row_data() {
         .execute_unprepared("UPDATE lab_orders SET customer = 'private-person@example.com'")
         .await
         .unwrap();
+    app.get("/dev/lab/orders").await.assert_ok();
     app.get("/dev/dashboard/schema")
         .await
         .assert_ok()
@@ -1292,8 +1294,757 @@ async fn the_schema_browser_never_shows_row_data() {
         .assert_contains("lab_order_items_order_id_idx")
         .assert_text("→ lab_orders")
         .assert_text("2 rows")
-        .assert_contains("m20261016_000600_create_lab_orders")
         .assert_not_contains("private-person");
+    for path in [
+        "/dev/dashboard/schema/tables/lab_orders",
+        "/dev/dashboard/schema/migrations",
+        "/dev/dashboard/schema/erd.svg",
+        "/dev/dashboard/schema/erd.mmd",
+    ] {
+        app.get(path)
+            .await
+            .assert_ok()
+            .assert_not_contains("private-person");
+    }
+    app.get("/dev/dashboard/schema/migrations")
+        .await
+        .assert_contains("m20261016_000600_create_lab_orders");
+}
+
+// ---- the diagram, tables, migrations ----------------------------------------------------------
+
+/// The ERD draws every table as a link to its page and every foreign key as an edge with its
+/// cardinality; the relationships list and Mermaid say the same in text; both exports download.
+#[tokio::test]
+async fn the_erd_draws_every_table_and_relationship() {
+    let app = dev_app().await;
+    let page = app.get("/dev/dashboard/schema").await;
+    page.assert_ok()
+        .assert_contains("/static/kernel/dashboard-erd.js?v=")
+        .assert_contains(r#"data-table="lab_orders""#)
+        .assert_contains(r#"href="/dev/dashboard/schema/tables/lab_order_items""#)
+        .assert_contains(r#"data-from="lab_order_items" data-to="lab_orders""#)
+        .assert_contains(r#"data-pe="one" data-ce="many""#)
+        .assert_contains("aria-labelledby=\"erd-svg-title\"")
+        .assert_text("lab_order_items (order_id) → lab_orders (id): each lab_order_items row points at exactly one lab_orders row")
+        .assert_contains("lab_orders ||--o{ lab_order_items")
+        .assert_contains("data-erd-tools hidden");
+    let svg = app.get("/dev/dashboard/schema/erd.svg").await;
+    svg.assert_ok()
+        .assert_contains("<svg xmlns=\"http://www.w3.org/2000/svg\"");
+    assert_eq!(svg.headers["content-type"], "image/svg+xml; charset=utf-8");
+    assert!(
+        svg.headers["content-disposition"]
+            .to_str()
+            .unwrap()
+            .starts_with("attachment")
+    );
+    let mmd = app.get("/dev/dashboard/schema/erd.mmd").await;
+    mmd.assert_ok();
+    assert!(mmd.body.starts_with("erDiagram\n"));
+    assert!(mmd.body.contains("lab_orders {"));
+}
+
+/// A table's page: its columns, neighbours, the queries that touched it and the migration that
+/// created it; an unknown name goes back to the schema with a flash.
+#[tokio::test]
+async fn a_table_page_shows_its_neighbours_queries_and_migration() {
+    let app = dev_app().await;
+    lab::seed(app.db(), 3).await.unwrap();
+    app.get("/dev/lab/orders").await.assert_ok();
+    app.get("/dev/dashboard/schema/tables/lab_orders")
+        .await
+        .assert_ok()
+        .assert_contains("data-table-detail")
+        .assert_contains(r#"href="/dev/dashboard/schema/tables/lab_order_items""#)
+        .assert_contains(
+            "m20261016_000600_create_lab_orders</span>: creates table lab_orders (6 columns",
+        )
+        .assert_contains("migration/src/m20261016_000600_create_lab_orders.rs")
+        .assert_contains(r#"href="/dev/dashboard/sql/"#);
+    let res = app
+        .get("/dev/dashboard/schema/tables/no_such_table\";--")
+        .await;
+    assert_eq!(res.location(), Some("/dev/dashboard/schema"));
+}
+
+/// The timeline: every migration, applied, when, its area and file, and what it did (derived from
+/// the source); a clean database has no drift.
+#[tokio::test]
+async fn the_migrations_timeline_shows_applied_and_what_each_did() {
+    let app = dev_app().await;
+    app.get("/dev/dashboard/schema/migrations")
+        .await
+        .assert_ok()
+        .assert_contains("m20261016_000600_create_lab_orders")
+        .assert_contains("m20261016_000000_create_cache_entries")
+        .assert_text("creates table lab_orders (6 columns: id, reference, customer, status, total_cents, created_at)")
+        .assert_text("creates index lab_order_items_order_id_idx")
+        .assert_contains("badge tone-ok\">applied")
+        .assert_contains(">dev-dashboard<")
+        .assert_contains("migration/src/m20261016_000600_create_lab_orders.rs")
+        .assert_text("None: every table and column the applied migrations create is in the database")
+        .assert_contains("is derived");
+}
+
+/// Pending migrations are reported (by name, nothing applied yet) and the host's dev-only Run
+/// button (POST /dev/migrations, CSRF-checked) applies them and comes back to the timeline.
+#[tokio::test]
+async fn pending_migrations_are_reported_and_run_from_the_timeline() {
+    use migration::MigratorTrait;
+    let app = dev_app().await;
+    migration::Migrator::down(app.db(), Some(1)).await.unwrap();
+    let tables = schema::tables(app.db()).await.unwrap();
+    let report = migrations::report(app.db(), &tables, std::path::Path::new(".")).await;
+    let pending: Vec<&str> = report.pending().iter().map(|m| m.name.as_str()).collect();
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert!(
+        !report
+            .migrations
+            .iter()
+            .find(|m| m.name == pending[0])
+            .unwrap()
+            .applied()
+    );
+    // Development's guard answers first with its own page and Run button.
+    let res = app.get("/dev/dashboard/schema/migrations").await;
+    assert_eq!(res.status, StatusCode::SERVICE_UNAVAILABLE);
+    res.assert_contains(r#"action="/dev/migrations""#);
+    app.post_form(
+        "/dev/migrations",
+        &[("return_to", "/dev/dashboard/schema/migrations")],
+    )
+    .await
+    .assert_redirect_to("/dev/dashboard/schema/migrations");
+    app.get("/dev/dashboard/schema/migrations")
+        .await
+        .assert_ok()
+        .assert_contains("0 pending");
+}
+
+/// Drift: a table made by hand (no migration creates it) shows on the timeline and in Insights.
+#[tokio::test]
+async fn drift_between_the_database_and_the_migrations_is_an_insight() {
+    let app = dev_app().await;
+    app.db()
+        .execute_unprepared("CREATE TABLE hand_made_widgets (id BIGINT PRIMARY KEY)")
+        .await
+        .unwrap();
+    app.get("/dev/dashboard/schema/migrations")
+        .await
+        .assert_ok()
+        .assert_text("Table hand_made_widgets isn't created by any migration");
+    app.get("/dev/dashboard/insights")
+        .await
+        .assert_ok()
+        .assert_text("Table hand_made_widgets isn't created by any migration");
+    app.get("/dev/dashboard/schema")
+        .await
+        .assert_contains("difference");
+}
+
+// ---- Ask AI -------------------------------------------------------------------------------------
+
+const AI_KEY: &str = "sk-ant-FIXTUREkey0000000000000000000000000";
+
+/// What a mock provider saw: path, headers, body.
+type Seen = Arc<std::sync::Mutex<Vec<(String, axum::http::HeaderMap, serde_json::Value)>>>;
+
+/// A loopback provider answering both API shapes with `reply` as the text.
+async fn mock_provider(reply: &'static str) -> (String, Seen) {
+    let seen: Seen = Arc::default();
+    let log = seen.clone();
+    let mock = Router::new().fallback(move |req: Request<Body>| {
+        let log = log.clone();
+        async move {
+            let path = req.uri().path().to_owned();
+            let headers = req.headers().clone();
+            let bytes = req.into_body().collect().await.unwrap().to_bytes();
+            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
+            log.lock().unwrap().push((path.clone(), headers, body));
+            let answer = if path.ends_with("/v1/messages") {
+                serde_json::json!({
+                    "content": [{ "type": "thinking", "thinking": "" }, { "type": "text", "text": reply }],
+                    "stop_reason": "end_turn",
+                    "usage": { "input_tokens": 1200, "output_tokens": 80 }
+                })
+            } else {
+                serde_json::json!({
+                    "choices": [{ "message": { "role": "assistant", "content": reply }, "finish_reason": "stop" }],
+                    "usage": { "prompt_tokens": 900, "completion_tokens": 60 }
+                })
+            };
+            axum::Json(answer)
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, mock).await });
+    (format!("http://{addr}"), seen)
+}
+
+fn ai_config(provider: AiProvider, base_url: &str) -> DashboardAi {
+    DashboardAi {
+        provider: Some(provider),
+        api_key: Some(AI_KEY.into()),
+        base_url: base_url.into(),
+        model: match provider {
+            AiProvider::Anthropic => "claude-sonnet-5-5".into(),
+            AiProvider::OpenAiCompatible => "llama3.1".into(),
+        },
+        in_production: false,
+    }
+}
+
+async fn ai_app(ai: DashboardAi) -> TestApp {
+    TestApp::with_config(Config {
+        env: AppEnv::Development,
+        dashboard: DashboardConfig {
+            ai,
+            ..DashboardConfig::default()
+        },
+        ..Config::test()
+    })
+    .await
+}
+
+/// Askama's escaping, undone (for reading a value out of a page).
+fn unescape(s: &str) -> String {
+    s.replace("&lt;", "<")
+        .replace("&#60;", "<")
+        .replace("&#62;", ">")
+        .replace("&gt;", ">")
+        .replace("&#34;", "\"")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&")
+}
+
+/// The prepared id and the previewed body of a panel.
+fn preview_of(page: &str) -> (String, serde_json::Value) {
+    let id = page
+        .split(r#"name="prepared" value=""#)
+        .nth(1)
+        .and_then(|r| r.split('"').next())
+        .unwrap()
+        .to_owned();
+    let pre = page.split("data-ai-preview>").nth(1).unwrap();
+    let json = unescape(pre.split("</pre>").next().unwrap());
+    (id, serde_json::from_str(&json).unwrap())
+}
+
+/// The assistant's address must be https, or http to this machine (a local model), without
+/// credentials in it.
+#[test]
+fn the_ai_base_url_is_https_or_loopback() {
+    use offrails_host::config::ai_base_url_ok as ok;
+    assert!(ok("https://api.anthropic.com"));
+    assert!(ok("https://gateway.example.com/v1"));
+    assert!(ok("http://localhost:11434/v1"));
+    assert!(ok("http://127.0.0.1:1234/v1"));
+    assert!(ok("http://[::1]:8080"));
+    assert!(
+        !ok("http://api.example.com/v1"),
+        "clear text over a network"
+    );
+    assert!(!ok("http://10.0.0.5:11434/v1"));
+    assert!(
+        !ok("https://user:pass@api.example.com"),
+        "credentials in the URL"
+    );
+    assert!(!ok("https://api.example.com/v1?key=x"));
+    assert!(!ok("file:///etc/passwd"));
+    assert!(!ok("not a url"));
+}
+
+/// Development only by default: production answers 404, also with the read-only view mounted,
+/// until DASHBOARD_AI_IN_PRODUCTION; then only through the admin gate, and only for its tabs.
+#[tokio::test]
+async fn the_ai_assistant_is_404_in_production_unless_enabled_behind_the_gate() {
+    let app = TestApp::with_config(production(gated())).await;
+    for path in [
+        "/admin/dashboard/ai?tab=overview",
+        "/dev/dashboard/ai?tab=overview",
+    ] {
+        let res = app
+            .get_with_headers(path, &[("authorization", &basic(ADMIN_PASSWORD))])
+            .await;
+        assert_eq!(res.status, StatusCode::NOT_FOUND, "{path}");
+    }
+    app.get_with_headers(
+        "/admin/dashboard",
+        &[("authorization", &basic(ADMIN_PASSWORD))],
+    )
+    .await
+    .assert_ok()
+    .assert_not_contains("data-ai-panel");
+    let mut ai = ai_config(AiProvider::Anthropic, "https://api.anthropic.com");
+    ai.in_production = true;
+    let app = TestApp::with_config(production(DashboardConfig { ai, ..gated() })).await;
+    let res = app.get("/admin/dashboard/ai?tab=overview").await;
+    assert_eq!(res.status, StatusCode::UNAUTHORIZED);
+    let auth = basic(ADMIN_PASSWORD);
+    app.get_with_headers(
+        "/admin/dashboard/ai/panel?tab=sql",
+        &[("authorization", &auth)],
+    )
+    .await
+    .assert_ok()
+    .assert_contains("data-ai-preview");
+    let res = app
+        .get_with_headers(
+            "/admin/dashboard/ai/panel?tab=logs",
+            &[("authorization", &auth)],
+        )
+        .await;
+    assert_eq!(
+        res.status,
+        StatusCode::NOT_FOUND,
+        "no logs in the read-only view"
+    );
+    let res = app.get("/dev/dashboard/ai?tab=overview").await;
+    assert_eq!(res.status, StatusCode::NOT_FOUND);
+}
+
+/// Unconfigured, every tab's panel explains how to turn it on, and asking sends nothing.
+#[tokio::test]
+async fn the_ai_panel_explains_how_to_enable_it_when_unconfigured() {
+    let app = dev_app().await;
+    for (path, tab) in [
+        ("/dev/dashboard", "overview"),
+        ("/dev/dashboard/insights", "insights"),
+        ("/dev/dashboard/requests", "requests"),
+        ("/dev/dashboard/routes", "routes"),
+        ("/dev/dashboard/traces", "traces"),
+        ("/dev/dashboard/sql", "sql"),
+        ("/dev/dashboard/logs", "logs"),
+        ("/dev/dashboard/schema", "schema"),
+        ("/dev/dashboard/schema/migrations", "migrations"),
+        ("/dev/dashboard/tests", "tests"),
+    ] {
+        app.get(path)
+            .await
+            .assert_ok()
+            .assert_contains(&format!("/dev/dashboard/ai/panel?tab={tab}&amp;item="));
+    }
+    app.get("/dev/dashboard/ai/panel?tab=sql")
+        .await
+        .assert_ok()
+        .assert_text("Turn on the assistant")
+        .assert_contains("DASHBOARD_AI_PROVIDER=anthropic")
+        .assert_not_contains("data-ai-preview");
+    app.post_form(
+        "/dev/dashboard/ai/ask",
+        &[("tab", "sql"), ("question", "Why?"), ("prepared", "0")],
+    )
+    .await
+    .assert_ok()
+    .assert_text("isn't configured");
+}
+
+/// Tabs and items are checked: an unknown tab or a malformed item is a 404, and an item can only
+/// select something the dashboard already holds.
+#[tokio::test]
+async fn ai_items_are_validated_per_tab() {
+    use offrails_host::kernel::dashboard::ai::Tab;
+    assert!(Tab::Traces.valid_item("42"));
+    assert!(!Tab::Traces.valid_item("42; DROP"));
+    assert!(Tab::Schema.valid_item("lab_orders"));
+    assert!(!Tab::Schema.valid_item("lab_orders\"--"));
+    assert!(Tab::Insights.valid_item("0a1b2c3d"));
+    assert!(!Tab::Insights.valid_item("../../etc"));
+    assert!(!Tab::Logs.valid_item("anything"));
+    let (base, _) = mock_provider("ok").await;
+    let app = ai_app(ai_config(AiProvider::Anthropic, &base)).await;
+    for path in [
+        "/dev/dashboard/ai/panel?tab=nope",
+        "/dev/dashboard/ai/panel?tab=schema&item=x%22%3B--",
+        "/dev/dashboard/ai/panel?tab=logs&item=1",
+    ] {
+        assert_eq!(app.get(path).await.status, StatusCode::NOT_FOUND, "{path}");
+    }
+    app.get("/dev/dashboard/ai/panel?tab=traces&item=999999")
+        .await
+        .assert_ok()
+        .assert_text("That trace is no longer kept.");
+}
+
+/// The preview is the request: the body the provider receives is the previewed one with the
+/// question in its slot. A missing, expired or other page's preview sends nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_the_previewed_context_is_sent() {
+    let (base, seen) = mock_provider("Use `find_with_related`.").await;
+    let app = ai_app(ai_config(AiProvider::Anthropic, &base)).await;
+    app.get("/dev/lab/orders/n-plus-one").await;
+    let panel = app.get("/dev/dashboard/ai/panel?tab=sql").await;
+    panel
+        .assert_ok()
+        .assert_contains("Preview what will be sent");
+    let (id, mut preview) = preview_of(&panel.body);
+    let question = "How do I fix this N+1 in SeaORM?";
+    let res = app
+        .post_form_with_headers(
+            "/dev/dashboard/ai/ask",
+            &[
+                ("prepared", &id),
+                ("tab", "sql"),
+                ("item", ""),
+                ("question", question),
+            ],
+            &[("x-dashboard-fragment", "1")],
+        )
+        .await;
+    res.assert_ok()
+        .assert_contains("<code>find_with_related</code>");
+    let calls = seen.lock().unwrap().clone();
+    assert_eq!(calls.len(), 1);
+    let content = preview["messages"][0]["content"]
+        .as_str()
+        .unwrap()
+        .replace("{your question}", question);
+    preview["messages"][0]["content"] = serde_json::Value::String(content);
+    assert_eq!(calls[0].2, preview, "exactly what the preview showed");
+    for (prepared, tab) in [("not-a-preview", "sql"), (id.as_str(), "logs")] {
+        app.post_form_with_headers(
+            "/dev/dashboard/ai/ask",
+            &[("prepared", prepared), ("tab", tab), ("question", question)],
+            &[("x-dashboard-fragment", "1")],
+        )
+        .await
+        .assert_ok()
+        .assert_text("The preview expired or belongs to another page");
+    }
+    assert_eq!(seen.lock().unwrap().len(), 1, "nothing else was sent");
+}
+
+/// Both shapes: Anthropic's Messages API (x-api-key, anthropic-version, system + messages) and
+/// OpenAI-compatible chat completions (Bearer, a system message), each parsed for text and usage.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_ai_client_speaks_both_provider_shapes() {
+    let (base, seen) = mock_provider("Hello").await;
+    let a = ai_config(AiProvider::Anthropic, &base);
+    let body = ai::body(&a, "sys", "user");
+    let answer = ai::send(&a, &body, Duration::from_secs(5)).await.unwrap();
+    assert_eq!(answer.text, "Hello");
+    assert_eq!((answer.input_tokens, answer.output_tokens), (1200, 80));
+    let o = ai_config(AiProvider::OpenAiCompatible, &format!("{base}/v1"));
+    let answer = ai::send(&o, &ai::body(&o, "sys", "user"), Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert_eq!(answer.output_tokens, 60);
+    let calls = seen.lock().unwrap().clone();
+    let (path, h, b) = &calls[0];
+    assert_eq!(path, "/v1/messages");
+    assert_eq!(h["x-api-key"], AI_KEY);
+    assert_eq!(h["anthropic-version"], "2023-06-01");
+    assert!(h.get("authorization").is_none());
+    assert_eq!(b["model"], "claude-sonnet-5-5");
+    assert_eq!(b["system"], "sys");
+    assert_eq!(b["messages"][0]["role"], "user");
+    assert_eq!(b["max_tokens"], ai::MAX_ANSWER_TOKENS);
+    assert!(
+        b.get("fallbacks").is_none(),
+        "fallbacks only on the Claude API itself"
+    );
+    let (path, h, b) = &calls[1];
+    assert_eq!(path, "/v1/chat/completions");
+    assert_eq!(h["authorization"], format!("Bearer {AI_KEY}"));
+    assert!(h.get("x-api-key").is_none());
+    assert_eq!(b["messages"][0]["role"], "system");
+    assert_eq!(b["messages"][1]["content"], "user");
+    let claude = ai_config(AiProvider::Anthropic, "https://api.anthropic.com");
+    // Off unless the app opts in (ai::USE_FALLBACK): an unchecked beta must never break every ask.
+    assert_eq!(
+        ai::body(&claude, "s", "u").get("fallbacks").is_some(),
+        ai::USE_FALLBACK
+    );
+}
+
+/// Errors, a silent provider, an oversized answer and a redirect all end in a clear message;
+/// the redirect is never followed, so the key never reaches the other host.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_ai_client_handles_errors_timeouts_oversize_and_redirects() {
+    let other_hits = Arc::new(AtomicUsize::new(0));
+    let hits = other_hits.clone();
+    let other = Router::new().fallback(move || {
+        hits.fetch_add(1, Ordering::SeqCst);
+        async { "{}" }
+    });
+    let other_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let other_addr = other_listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(other_listener, other).await });
+    let mock = Router::new()
+        .route(
+            "/err/v1/messages",
+            post(|| async {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    r#"{"type":"error","error":{"type":"api_error","message":"upstream https://user:hunter2@internal.example/x failed"}}"#,
+                )
+            }),
+        )
+        .route(
+            "/denied/v1/messages",
+            post(|| async { (StatusCode::UNAUTHORIZED, r#"{"error":{"message":"invalid x-api-key"}}"#) }),
+        )
+        .route(
+            "/big/v1/messages",
+            post(|| async { "x".repeat(ai::MAX_RESPONSE_BYTES + 10) }),
+        )
+        .route(
+            "/redirect/v1/messages",
+            post(move || async move {
+                (
+                    StatusCode::TEMPORARY_REDIRECT,
+                    [("location", format!("http://{other_addr}/v1/messages"))],
+                )
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, mock).await });
+    let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let silent_addr = silent.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((s, _)) = silent.accept().await {
+            held.push(s);
+        }
+    });
+    let ask = |base: String| async move {
+        let a = ai_config(AiProvider::Anthropic, &base);
+        ai::send(&a, &ai::body(&a, "s", "u"), Duration::from_secs(1)).await
+    };
+    match ask(format!("http://{addr}/err")).await {
+        Err(ai::AiError::Provider(500, m)) => {
+            assert!(!m.contains("hunter2"), "{m}");
+            assert!(m.contains("[redacted]"), "{m}");
+        }
+        other => panic!("{:?}", other.err()),
+    }
+    let denied = ask(format!("http://{addr}/denied")).await.err().unwrap();
+    assert!(denied.message().contains("refused the key"));
+    assert_eq!(
+        ask(format!("http://{addr}/big")).await.err(),
+        Some(ai::AiError::TooLarge)
+    );
+    assert_eq!(
+        ask(format!("http://{addr}/redirect")).await.err(),
+        Some(ai::AiError::Redirect)
+    );
+    assert_eq!(
+        other_hits.load(Ordering::SeqCst),
+        0,
+        "the redirect was not followed"
+    );
+    let started = Instant::now();
+    assert_eq!(
+        ask(format!("http://{silent_addr}")).await.err(),
+        Some(ai::AiError::Timeout)
+    );
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+/// A reply with markup shows as text: the answer is parsed into blocks and rendered escaped.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_model_reply_with_markup_renders_inert() {
+    let (base, _) = mock_provider(
+        "<script>alert(1)</script>\n\n<img src=x onerror=alert(2)> **bold** [x](javascript:alert(3))",
+    )
+    .await;
+    let app = ai_app(ai_config(AiProvider::Anthropic, &base)).await;
+    let panel = app.get("/dev/dashboard/ai/panel?tab=overview").await;
+    let (id, _) = preview_of(&panel.body);
+    for fragment in [true, false] {
+        let headers: &[(&str, &str)] = if fragment {
+            &[("x-dashboard-fragment", "1")]
+        } else {
+            &[]
+        };
+        let res = app
+            .post_form_with_headers(
+                "/dev/dashboard/ai/ask",
+                &[("prepared", &id), ("tab", "overview"), ("question", "Hi")],
+                headers,
+            )
+            .await;
+        res.assert_ok()
+            .assert_contains("&#60;script&#62;alert(1)&#60;/script&#62;")
+            .assert_contains("<strong>bold</strong>")
+            .assert_not_contains("<script>alert")
+            .assert_not_contains("<img")
+            .assert_not_contains("href=\"javascript:");
+    }
+}
+
+/// The key goes in its header only: never on a page, in a log line, a trace, the dashboard's
+/// recorded requests, or Debug.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_ai_key_never_reaches_logs_traces_pages_or_recorded_requests() {
+    let _guard = traced();
+    let (base, seen) = mock_provider("Fine.").await;
+    let ai = ai_config(AiProvider::Anthropic, &base);
+    assert!(!format!("{ai:?}").contains(AI_KEY));
+    let app = ai_app(ai).await;
+    app.get("/dev/lab/orders").await;
+    let panel = app.get("/dev/dashboard/ai/panel?tab=logs").await;
+    let (id, _) = preview_of(&panel.body);
+    let answer = app
+        .post_form(
+            "/dev/dashboard/ai/ask",
+            &[
+                ("prepared", &id),
+                ("tab", "logs"),
+                ("question", "Summarize"),
+            ],
+        )
+        .await;
+    answer.assert_ok().assert_text("Fine.");
+    assert_eq!(
+        seen.lock().unwrap()[0].1["x-api-key"],
+        AI_KEY,
+        "it was used"
+    );
+    app.get("/dev/dashboard/config")
+        .await
+        .assert_text("Anthropic · claude-sonnet-5-5")
+        .assert_text("key: set");
+    let mut bodies = vec![panel.body.clone(), answer.body.clone()];
+    for path in [
+        "/dev/dashboard/config",
+        "/dev/dashboard/ai?tab=overview",
+        "/dev/dashboard.json",
+        "/dev/dashboard/logs",
+        "/dev/dashboard/requests",
+        "/dev/dashboard/traces",
+    ] {
+        bodies.push(app.get(path).await.body);
+    }
+    for b in &bodies {
+        assert!(
+            !b.contains(AI_KEY) && !b.contains("sk-ant-"),
+            "a page shows the key"
+        );
+    }
+    assert!(
+        lock(&HUB.logs)
+            .lines()
+            .iter()
+            .all(|l| !l.message.contains(AI_KEY) && !l.fields.contains(AI_KEY))
+    );
+    for t in lock(&HUB.traces).list(false) {
+        assert!(!t.path.contains(AI_KEY));
+        assert!(t.spans.iter().all(|s| !s.fields.contains(AI_KEY)));
+        assert!(t.events.iter().all(|e| !e.message.contains(AI_KEY)));
+    }
+    let routes = lock(&HUB.http).rows();
+    assert!(
+        routes.iter().all(|r| !r.route.contains("/ai")),
+        "the dashboard doesn't record itself"
+    );
+    assert!(!format!("{:?}", app.state.config).contains(AI_KEY));
+}
+
+/// At most PER_MINUTE a minute and the daily request and token budgets, per process.
+#[test]
+fn ai_requests_are_rate_limited_and_budgeted() {
+    let mut b = ai::Budget::default();
+    let t0 = Instant::now();
+    for _ in 0..ai::PER_MINUTE {
+        b.reserve(1, t0).unwrap();
+    }
+    assert_eq!(b.reserve(1, t0), Err(ai::AiError::RateLimited));
+    let later = t0 + Duration::from_secs(61);
+    b.reserve(1, later).unwrap();
+    b.spend(1, ai::DAILY_TOKENS);
+    assert!(matches!(
+        b.reserve(1, later + Duration::from_secs(61)),
+        Err(ai::AiError::Budget(_))
+    ));
+    assert!(b.left(1).starts_with(&format!(
+        "{} questions",
+        ai::DAILY_REQUESTS - ai::PER_MINUTE as u32 - 1
+    )));
+    b.reserve(2, later + Duration::from_secs(200)).unwrap();
+    let mut b = ai::Budget::default();
+    let mut t = t0;
+    for _ in 0..ai::DAILY_REQUESTS {
+        t += Duration::from_secs(11);
+        b.reserve(5, t).unwrap();
+    }
+    assert!(matches!(
+        b.reserve(5, t + Duration::from_secs(61)),
+        Err(ai::AiError::Budget(_))
+    ));
+}
+
+/// Every tab's context is built from redacted data: no row values, no SQL parameter values, no
+/// secret log fields, no env values or tokens from the config.
+#[tokio::test]
+async fn ai_contexts_carry_no_rows_parameters_or_secrets() {
+    let _guard = traced();
+    let app = TestApp::with_config(Config {
+        env: AppEnv::Development,
+        dashboard: DashboardConfig {
+            github_token: Some("ghp_FIXTUREtoken0000000000000000000000".into()),
+            ..DashboardConfig::default()
+        },
+        ..Config::test()
+    })
+    .await;
+    lab::seed(app.db(), 3).await.unwrap();
+    app.db()
+        .execute_unprepared("UPDATE lab_orders SET customer = 'private-person@example.com'")
+        .await
+        .unwrap();
+    app.get("/dev/lab/orders").await.assert_ok();
+    app.get("/dev/lab/orders/n-plus-one").await.assert_ok();
+    app.get("/dev/lab/slow-query").await.assert_ok();
+    tracing::info!(password = "hunter2-secret", "signing in");
+    tracing::info!("token tok-FIXTURE0123456789abcdefABCDEFghij in a message");
+    sample(&app);
+    let fp = lock(&HUB.sql).rows(sql::Sort::Total)[0].id.clone();
+    let trace = lock(&HUB.traces).list(false)[0].id.to_string();
+    for (tab, item) in [
+        (ai::Tab::Overview, None),
+        (ai::Tab::Insights, None),
+        (ai::Tab::Requests, None),
+        (ai::Tab::Traces, None),
+        (ai::Tab::Traces, Some(trace.as_str())),
+        (ai::Tab::Sql, None),
+        (ai::Tab::Sql, Some(fp.as_str())),
+        (ai::Tab::Logs, None),
+        (ai::Tab::Schema, None),
+        (ai::Tab::Schema, Some("lab_orders")),
+        (ai::Tab::Migrations, None),
+        (ai::Tab::Routes, None),
+        (ai::Tab::Tests, None),
+    ] {
+        let ctx = ai_context::build(&app.state, false, tab, item)
+            .await
+            .unwrap();
+        assert!(!ctx.is_empty(), "{tab:?}");
+        for secret in [
+            "private-person",
+            "hunter2",
+            "tok-FIXTURE",
+            "ghp_FIXTURE",
+            "postgres://",
+        ] {
+            assert!(
+                !ctx.contains(secret),
+                "{tab:?} {item:?} carries {secret}:\n{ctx}"
+            );
+        }
+    }
+    let schema = ai_context::build(&app.state, false, ai::Tab::Schema, Some("lab_orders"))
+        .await
+        .unwrap();
+    assert!(schema.contains("customer"), "names and types are the point");
+    let sql_ctx = ai_context::build(&app.state, false, ai::Tab::Sql, None)
+        .await
+        .unwrap();
+    assert!(sql_ctx.contains("parameters") || sql_ctx.contains("lab_orders"));
 }
 
 // ---- tests page ---------------------------------------------------------------------------------

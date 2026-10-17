@@ -1,7 +1,7 @@
 # samples/dev-dashboard/sample.toml: the format is samples/FORMAT.md.
 name = "dev-dashboard"
 version = "0.7.0"
-summary = "/dev/dashboard, an in-process LiveDashboard: live charts (memory, CPU, req/s, p50/p95/p99, errors, DB pool, Tokio), requests per route, traces as waterfalls, SQL fingerprints with N+1 and EXPLAIN, a live log tail, insights, a routes explorer, a schema browser, test runs and CI, and a load lab. Development only; a read-only subset for admins in production."
+summary = "/dev/dashboard, an in-process LiveDashboard: live charts (memory, CPU, req/s, p50/p95/p99, errors, DB pool, Tokio), requests per route, traces as waterfalls, SQL fingerprints with N+1 and EXPLAIN, a live log tail, insights, a routes explorer, an interactive schema diagram (ERD) with a migrations timeline and drift checks, an optional bring-your-own-key AI assistant, test runs and CI, and a load lab. Development only; a read-only subset for admins in production."
 depends_on = []
 extracted_from = "Rust off Rails apps"
 
@@ -98,6 +98,8 @@ pub struct DashboardConfig {
     /// `DASHBOARD_DEMO_HISTORY=true` (development only): fill the last hour with synthetic,
     /// clearly marked history at boot (the demo and its screenshots).
     pub demo_history: bool,
+    /// The optional "Ask AI" assistant (`DASHBOARD_AI_*`).
+    pub ai: DashboardAi,
 }
 
 impl Default for DashboardConfig {
@@ -112,6 +114,7 @@ impl Default for DashboardConfig {
             test_database_url: None,
             cargo_target_dir: None,
             demo_history: false,
+            ai: DashboardAi::default(),
         }
     }
 }
@@ -140,6 +143,7 @@ impl DashboardConfig {
         if !github_api.starts_with("https://") {
             invalid.push("GITHUB_API_URL (expected https://)");
         }
+        let ai = DashboardAi::from_env(&get, &mut invalid);
         if !invalid.is_empty() {
             anyhow::bail!("invalid env vars: {} (see .env.example)", invalid.join(", "));
         }
@@ -154,7 +158,124 @@ impl DashboardConfig {
             cargo_target_dir: get("CARGO_TARGET_DIR"),
             demo_history: env == AppEnv::Development
                 && matches!(get("DASHBOARD_DEMO_HISTORY").as_deref(), Some("true" | "1")),
+            ai,
         })
+    }
+}
+
+/// Which API shape the dashboard's assistant speaks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AiProvider {
+    /// Anthropic's Messages API (`POST /v1/messages`).
+    Anthropic,
+    /// Any OpenAI-compatible chat completions API: OpenAI, Ollama, LM Studio, a gateway.
+    OpenAiCompatible,
+}
+
+/// The dashboard's optional "Ask AI" assistant: env only, never stored, never shown back.
+#[derive(Clone, Default)]
+pub struct DashboardAi {
+    /// `DASHBOARD_AI_PROVIDER=anthropic|openai-compatible`; unset: no assistant.
+    pub provider: Option<AiProvider>,
+    /// `DASHBOARD_AI_API_KEY`: required for Anthropic, optional for a local model. Never
+    /// shown, logged or recorded.
+    pub api_key: Option<String>,
+    /// `DASHBOARD_AI_BASE_URL`: https, or http to a loopback address (a local model).
+    pub base_url: String,
+    /// `DASHBOARD_AI_MODEL`: `claude-sonnet-5-5` by default for Anthropic.
+    pub model: String,
+    /// `DASHBOARD_AI_IN_PRODUCTION=true`: also in the read-only `/admin/dashboard`, behind its gate.
+    pub in_production: bool,
+}
+
+impl DashboardAi {
+    fn from_env(get: &dyn Fn(&str) -> Option<String>, invalid: &mut Vec<&'static str>) -> Self {
+        let provider = match get("DASHBOARD_AI_PROVIDER").as_deref() {
+            None => None,
+            Some("anthropic") => Some(AiProvider::Anthropic),
+            Some("openai-compatible" | "openai") => Some(AiProvider::OpenAiCompatible),
+            Some(_) => {
+                invalid.push("DASHBOARD_AI_PROVIDER (expected anthropic or openai-compatible)");
+                None
+            }
+        };
+        let base_url = get("DASHBOARD_AI_BASE_URL").unwrap_or_else(|| match provider {
+            Some(AiProvider::OpenAiCompatible) => "https://api.openai.com/v1".into(),
+            _ => "https://api.anthropic.com".into(),
+        });
+        let api_key = get("DASHBOARD_AI_API_KEY");
+        let model = get("DASHBOARD_AI_MODEL").unwrap_or_else(|| match provider {
+            Some(AiProvider::Anthropic) => "claude-sonnet-5-5".into(),
+            _ => String::new(),
+        });
+        if provider.is_some() {
+            if !ai_base_url_ok(&base_url) {
+                invalid.push(
+                    "DASHBOARD_AI_BASE_URL (https://, or http:// to localhost/127.0.0.1/[::1]; no credentials, query or fragment)",
+                );
+            }
+            if model.is_empty() {
+                invalid.push("DASHBOARD_AI_MODEL (required for openai-compatible)");
+            }
+            if provider == Some(AiProvider::Anthropic) && api_key.is_none() {
+                invalid.push("DASHBOARD_AI_API_KEY (required for anthropic)");
+            }
+        }
+        let in_production = match get("DASHBOARD_AI_IN_PRODUCTION").as_deref() {
+            None | Some("false") | Some("0") => false,
+            Some("true") | Some("1") => true,
+            Some(_) => {
+                invalid.push("DASHBOARD_AI_IN_PRODUCTION (expected true or false)");
+                false
+            }
+        };
+        Self {
+            provider,
+            api_key,
+            base_url,
+            model,
+            in_production,
+        }
+    }
+}
+
+/// SECURITY: the assistant's address comes from the environment only, and is https unless it is
+/// this machine (a local model): the dashboard's context never crosses a network in clear text,
+/// and no URL carries credentials (test: the_ai_base_url_is_https_or_loopback).
+pub fn ai_base_url_ok(raw: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(raw) else {
+        return false;
+    };
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return false;
+    }
+    let host = url.host_str().unwrap_or_default();
+    let loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    match url.scheme() {
+        "https" => !host.is_empty(),
+        "http" => loopback,
+        _ => false,
+    }
+}
+
+impl fmt::Debug for DashboardAi {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DashboardAi")
+            .field("provider", &self.provider)
+            .field("api_key", &self.api_key.as_ref().map(|_| "[redacted]"))
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("in_production", &self.in_production)
+            .finish()
     }
 }
 
@@ -188,6 +309,7 @@ impl fmt::Debug for DashboardConfig {
             .field("github_fixture", &self.github_fixture.is_some())
             .field("test_database_url", &set(&self.test_database_url))
             .field("demo_history", &self.demo_history)
+            .field("ai", &self.ai)
             .finish()
     }
 }
@@ -272,6 +394,13 @@ text = '''
 ("GET",  "/dev/dashboard/logs",                   "web::logs_page",    Access::Dev),
 ("GET",  "/dev/dashboard/logs/stream",            "web::logs_stream",  Access::Dev),
 ("GET",  "/dev/dashboard/schema",                 "web::schema_page",  Access::Dev),
+("GET",  "/dev/dashboard/schema/erd.svg",         "web::erd_svg",      Access::Dev),
+("GET",  "/dev/dashboard/schema/erd.mmd",         "web::erd_mermaid",  Access::Dev),
+("GET",  "/dev/dashboard/schema/tables/{name}",   "web::schema_table", Access::Dev),
+("GET",  "/dev/dashboard/schema/migrations",      "web::migrations_page", Access::Dev),
+("GET",  "/dev/dashboard/ai",                     "web::ai_page",      Access::Dev),
+("GET",  "/dev/dashboard/ai/panel",               "web::ai_panel",     Access::Dev),
+("POST", "/dev/dashboard/ai/ask",                 "web::ai_ask",       Access::Dev),
 ("GET",  "/dev/dashboard/tests",                  "web::tests_page",   Access::Dev),
 ("POST", "/dev/dashboard/tests/run",              "web::tests_run",    Access::Dev),
 ("GET",  "/dev/dashboard/github",                 "web::github_page",  Access::Dev),
@@ -300,6 +429,9 @@ text = '''
 ("GET",  "/admin/dashboard/sql/{id}",             "web::sql_show",     Access::Admin),
 ("GET",  "/admin/dashboard/config",               "web::config_page",  Access::Admin),
 ("GET",  "/admin/dashboard/stream",               "web::stream",       Access::Admin),
+("GET",  "/admin/dashboard/ai",                   "web::ai_page",      Access::Admin),
+("GET",  "/admin/dashboard/ai/panel",             "web::ai_panel",     Access::Admin),
+("POST", "/admin/dashboard/ai/ask",               "web::ai_ask",       Access::Admin),
 '''
 
 [[wire]]
@@ -418,6 +550,12 @@ DASHBOARD_IN_PRODUCTION=false
 # CARGO_TARGET_DIR=target
 # DASHBOARD_GITHUB_FIXTURE=tests/fixtures/github   # development only: recorded GitHub answers (the demo)
 # DASHBOARD_DEMO_HISTORY=false             # development only: an hour of synthetic, marked history (the demo)
+# "Ask AI" on the dashboard (optional, your own key; development only unless DASHBOARD_AI_IN_PRODUCTION).
+# DASHBOARD_AI_PROVIDER=anthropic          # or openai-compatible (OpenAI, Ollama, LM Studio, a gateway)
+# DASHBOARD_AI_API_KEY=                    # never shown, logged or stored; optional for a local model
+# DASHBOARD_AI_MODEL=claude-sonnet-5-5     # Anthropic default; claude-opus-5-5 (deeper), claude-haiku-5-5 (cheaper)
+# DASHBOARD_AI_BASE_URL=https://api.anthropic.com   # https, or http://localhost:11434/v1 (Ollama)
+# DASHBOARD_AI_IN_PRODUCTION=false         # also in the read-only /admin/dashboard, behind its gate
 '''
 
 [[wire]]
@@ -457,6 +595,8 @@ text = '''
 "/dev/dashboard/sql",
 "/dev/dashboard/logs",
 "/dev/dashboard/schema",
+"/dev/dashboard/schema/migrations",
+"/dev/dashboard/ai?tab=overview",
 "/dev/dashboard/tests",
 "/dev/dashboard/github",
 "/dev/dashboard/lab",

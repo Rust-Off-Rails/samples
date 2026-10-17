@@ -4,6 +4,8 @@ What "working and safe" means for the dev dashboard, and the test that proves ea
 
 The dashboard sees everything the app does: SQL with its parameters, log lines, request paths, the schema, the environment, a GitHub token. Treat each of those as something that must not leave this machine, and the dashboard's actions (traffic, EXPLAIN, running tests) as things an attacker would love to trigger.
 
+The optional **Ask AI** assistant is the one feature that sends data off the machine, to a provider the developer configured. Its rows below treat that provider as a third party: it gets only what the developer previewed, built from data the dashboard had already redacted, and its answer is untrusted text.
+
 ## Threat model
 
 | STRIDE | Threat | Control | Test |
@@ -30,6 +32,15 @@ The dashboard sees everything the app does: SQL with its parameters, log lines, 
 | Denial of service | The middleware slows every request | A few µs in release (measured); one atomic check when off; the dashboard's own pages aren't recorded | `the_middleware_overhead_is_small` |
 | Denial of service | The load lab or the test runner takes the machine down | Hard caps (rate, duration, in flight; skipped requests are counted, never queued); one run at a time; the memory spike frees itself; one test run at a time | `traffic_only_targets_this_app`, `the_memory_spike_is_freed`, `the_run_tests_button_runs_in_the_background_with_progress` |
 | Denial of service | GitHub's rate limit is burned by page views | Answers cached for 60 s; a used-up limit stops calls until its reset; 4 s timeout | `github_rate_limits_and_timeouts_are_respected` |
+| Information disclosure | Ask AI sends customer data, secrets or credentials to a third party (the AI provider) | Contexts are built on the server (`ai_context.rs`) from already-redacted data only: SQL fingerprints with parameters as type and length, route patterns and redacted paths, log lines and failure output through `kernel::redact::text`, schema names, types and counts; never a row, an env value, a cookie, a header, a token or the GitHub data; the read-only view sends less (no parameters, log events or span fields, four tabs only) | `ai_contexts_carry_no_rows_parameters_or_secrets`, `the_schema_browser_never_shows_row_data` |
+| Information disclosure | Ask AI sends something the developer never saw | Preparing a context stores it under a random id for 15 minutes and the panel previews the exact JSON body and headers (the key's value never shown); Ask sends that id and the question, and nothing is sent when the id is missing, expired or belongs to another tab or item | `only_the_previewed_context_is_sent` |
+| Information disclosure | The AI key leaks: on a page, in the log, in a trace, in the dashboard's recorded requests, in `Debug` | Env only (`DASHBOARD_AI_API_KEY`), never stored; sent in one header marked sensitive (`x-api-key` or `Authorization`); the Config page shows "set (redacted)"; `DashboardAi`'s `Debug` redacts it; the dashboard's own routes aren't recorded; failures log the error kind, never the request | `the_ai_key_never_reaches_logs_traces_pages_or_recorded_requests`, `config_redacts_secrets_and_credentials` |
+| Tampering | SSRF through the provider address: the dashboard is made to call an internal host, or a redirect carries the request and key elsewhere | The address comes from `DASHBOARD_AI_BASE_URL` only (no request can choose it), checked at boot: `https://`, or `http://` to localhost, 127.0.0.0/8 or ::1 (a local model), no credentials, query or fragment; redirects are never followed; 5 s connect, 90 s total, 256 KB answer cap | `the_ai_base_url_is_https_or_loopback`, `the_ai_client_handles_errors_timeouts_oversize_and_redirects` |
+| Tampering | XSS through the model's answer (a prompt injection in a log line makes the model reply with markup) | The reply is parsed into a Markdown subset of text blocks (`ai::render`) that Askama renders escaped; links only to the framework's own guides, built from an allowlist; the system prompt marks the page data as data, never instructions; the assistant has no tools, so an injected instruction can only change the text | `a_model_reply_with_markup_renders_inert`, `the_markdown_subset_parses_into_blocks` |
+| Tampering | An Ask AI item id reaches SQL or the filesystem | Item ids are validated per tab (a trace number, a fingerprint, a plain identifier, an 8-hex finding id) and only select something the dashboard holds; table pages look names up in the catalog's own list | `ai_items_are_validated_per_tab`, `only_plain_identifiers_reach_catalog_sql` |
+| Spoofing | A cross-site page makes the browser ask the AI (spending the developer's budget) | `POST …/ai/ask` goes through the CSRF layer like every action | `cross_site_posts_to_every_unsafe_route_are_403` |
+| Denial of service | Cost abuse: a loop, a stuck button or a script burns the developer's AI budget | 6 questions a minute and 200 questions or 400,000 tokens a day per process (`PER_MINUTE`, `DAILY_REQUESTS`, `DAILY_TOKENS`, `// APP:`); `max_tokens` 2,000; a 24,000-character context cap; the page shows what's left | `ai_requests_are_rate_limited_and_budgeted`, `contexts_over_the_cap_are_cut_with_a_marker` |
+| Elevation of privilege | Ask AI is reachable in production | Development only; in production only with `DASHBOARD_AI_IN_PRODUCTION=true`, a provider, and the read-only view mounted behind its admin gate (then only its four tabs); otherwise 404 | `the_ai_assistant_is_404_in_production_unless_enabled_behind_the_gate` |
 | Elevation of privilege | A signed-in non-admin opens the production view | `admin_from_session` returns `Some(false)` and the view answers 404, even with the Basic password; with auth-core installed, `accounts.rs` asks auth-core's session (`is_admin` is the `// APP:` hook, nobody until the app adds a role) | `a_signed_in_non_admin_gets_404_from_the_production_view` |
 
 ## Invariants
@@ -53,12 +64,19 @@ The dashboard sees everything the app does: SQL with its parameters, log lines, 
 | Test runs are imported from JUnit, with flaky tests, coverage and spec coverage | `test_runs_are_imported_with_flaky_tests_and_coverage`, `nextest_progress_lines_parse` |
 | The GitHub page explains itself without a repo, and renders from a recorded fixture | `the_github_page_explains_itself_without_a_repo`, `the_github_page_renders_ci_and_repo_status_from_a_fixture` |
 | Agents get the numbers as JSON | `agents_get_the_numbers_as_json` |
+| The ERD draws every table (a link to its page) and foreign key with its cardinality, deterministically, without overlaps; Mermaid and SVG exports say the same | `the_erd_draws_every_table_and_relationship`, `cardinality_follows_nullability_and_uniqueness`, `the_layout_is_deterministic_layered_and_overlap_free`, `barycenter_ordering_untangles_crossed_children`, `markup_in_names_is_escaped_in_the_export` |
+| A table page shows its neighbours, the queries that touched it and the migration that created it | `a_table_page_shows_its_neighbours_queries_and_migration` |
+| The migrations timeline shows every migration, applied or pending, and what it did (derived from the source, and labelled as derived) | `the_migrations_timeline_shows_applied_and_what_each_did`, `migration_effects_are_derived_from_the_source`, `pending_migrations_are_reported_and_run_from_the_timeline` |
+| Drift (a table or column the migrations don't explain, a missing one, a file edited after it was applied) shows on the timeline and in Insights | `drift_between_the_database_and_the_migrations_is_an_insight`, `drift_between_migrations_and_the_database_is_found`, `a_migration_edited_after_it_was_applied_is_flagged` |
+| Ask AI explains how to turn itself on when unconfigured, and speaks both provider shapes | `the_ai_panel_explains_how_to_enable_it_when_unconfigured`, `the_ai_client_speaks_both_provider_shapes` |
 
 ## In a browser (not part of the test suite)
 
 - axe-core (WCAG 2.2 AA) on every page, with the OS light and dark and with the switch forcing each: 0 violations (`AXE=1 tools/screenshots.sh dev-dashboard`).
 - No console errors and no CSP violations on any page (the screenshot script fails on either; a violation would also show on Insights).
 - Keyboard: every action is a link, button or form; charts have data tables; live regions announce run progress politely and nothing else.
+- The diagram: Tab reaches every table (Enter shows its detail, Escape closes it), arrow keys pan and + / − / 0 zoom while it has focus; the table listing and the relationships list are its text alternative; at 320 px it scrolls inside its frame with no page overflow.
+- Ask AI: never calls a real API in tests (loopback mocks only); `tools/screenshots.sh` shoots the answer against `tools/screenshots/ai-mock.mjs`.
 
 ## Commands
 

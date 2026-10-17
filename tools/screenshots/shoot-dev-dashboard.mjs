@@ -6,6 +6,9 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { chromium } from "playwright-core";
 
 const BASE = process.env.BASE ?? "http://localhost:3900";
+// A second demo server whose "Ask AI" talks to tools/screenshots/ai-mock.mjs (screenshots.sh
+// starts both); without it the screens that need an answer are skipped.
+const AI_BASE = process.env.AI_BASE ?? "";
 const OUT = process.env.OUT ?? "out";
 const AXE = process.env.AXE === "1";
 const only = process.argv.slice(2);
@@ -49,7 +52,26 @@ const screens = [
     await page.waitForLoadState("load");
   }],
   ["logs", async () => "/dev/dashboard/logs"],
-  ["schema", async () => "/dev/dashboard/schema"],
+  ["schema", async () => "/dev/dashboard/schema", async (page) => { await page.locator("#table-lab_orders").scrollIntoViewIfNeeded(); }],
+  ["erd", async () => "/dev/dashboard/schema", async (page) => { await page.locator("[data-erd]").scrollIntoViewIfNeeded(); }],
+  ["erd-focus", async () => "/dev/dashboard/schema", async (page) => {
+    await page.locator('.erd-t[data-table="users"]').click();
+    await page.locator("[data-erd-detail] [data-table-detail]").waitFor();
+    await page.locator("[data-erd-viewport]").scrollIntoViewIfNeeded();
+  }],
+  ["table", async () => "/dev/dashboard/schema/tables/lab_order_items"],
+  ["migrations", async () => "/dev/dashboard/schema/migrations"],
+  ["ai-setup", async () => "/dev/dashboard/sql", async (page) => {
+    await page.locator("[data-ai-panel] > summary").click();
+    await page.locator(".ai-setup").waitFor();
+  }],
+  ["ai-answer", async () => "/dev/dashboard/sql", async (page) => {
+    await page.locator("[data-ai-panel] > summary").click();
+    await page.locator("[data-ai-prompt]").first().click();
+    await page.locator("[data-ai-send]").click();
+    await page.locator(".ai-result .ai-text").waitFor();
+    await page.locator("[data-ai-panel]").scrollIntoViewIfNeeded();
+  }, { base: AI_BASE }],
   ["tests", async () => "/dev/dashboard/tests"],
   ["github", async () => "/dev/dashboard/github"],
   ["config", async () => "/dev/dashboard/config"],
@@ -70,6 +92,8 @@ try {
   mkdirSync(OUT, { recursive: true });
   for (const [screen, resolve, act, opt = {}] of screens) {
     if (only.length && !only.includes(screen)) continue;
+    if (opt.base === "") { console.log(`skip ${screen}: no AI_BASE`); continue; }
+    const base = opt.base ?? BASE;
     for (const theme of opt.themes ?? ["light", "dark"]) {
       for (const [vp, opts] of Object.entries(viewports)) {
         const context = await browser.newContext({
@@ -77,14 +101,14 @@ try {
           deviceScaleFactor: opts.deviceScaleFactor, isMobile: opts.isMobile, hasTouch: opts.hasTouch ?? false,
           colorScheme: theme, reducedMotion: "reduce",
         });
-        if (opt.cookie) await context.addCookies([{ name: "offrails_theme", value: opt.cookie, url: BASE }]);
+        if (opt.cookie) await context.addCookies([{ name: "offrails_theme", value: opt.cookie, url: base }]);
         const page = await context.newPage();
         const errors = [];
         page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
         page.on("pageerror", (e) => errors.push(String(e)));
         await ensureTraffic();
         const path = await resolve(page);
-        await page.goto(`${BASE}${path}`, { waitUntil: "load" });
+        await page.goto(`${base}${path}`, { waitUntil: "load" });
         if (act) await act(page);
         await page.waitForTimeout(1200);
         const name = `${screen}-${theme}-${vp}`;

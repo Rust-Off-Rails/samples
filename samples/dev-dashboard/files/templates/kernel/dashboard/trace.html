@@ -2,7 +2,7 @@
 {% block dash %}
 <header class="dash-head trace-head">
   <h1><span class="method m-{{ t.method }}">{{ t.method }}</span> <span class="mono">{{ t.path }}</span></h1>
-  <p class="trace-facts"><span class="badge tone-{{ tone }}">{{ t.status }}</span> <strong>{{ dur }}</strong> · route <a class="mono" href="{{ base }}/traces?route={{ t.route|urlencode }}">{{ t.route }}</a> · {{ t.statements }} SQL in {{ sql_total }} · {{ when }}{% if !t.request_id.is_empty() %} · request <span class="mono">{{ t.request_id }}</span>{% endif %}</p>
+  <p class="trace-facts"><span class="badge tone-{{ tone }}">{{ t.status }}</span> <strong>{{ dur }}</strong> · route <a class="mono" href="{{ base }}/traces?route={{ t.route|urlencode }}">{{ t.route }}</a> · {{ t.statements }} SQL in {{ sql_total }} · {{ when }}{% if !t.request_id.is_empty() %} · request <span class="mono">{{ t.request_id }}</span>{% endif %}{% if d.ai_on %} · <a href="{{ d.ask_href("traces", &t.id.to_string()) }}">Ask AI why it took {{ dur }}</a>{% endif %}</p>
 </header>
 {% if !n_plus_one.is_empty() %}
 <div class="callout warn" role="note">

@@ -251,8 +251,13 @@ pub async fn findings(state: &AppState) -> Vec<Finding> {
             fix: "Run `app db migrate` (bin/dev does it on every rebuild).".into(),
             guide: ".offrails/guides/dev-tools.md#pending-migrations",
             guide_url: "https://rustoffrails.org/docs/dev-tools#pending-migrations",
-            href: "/dev/dashboard/schema".into(),
+            href: "/dev/dashboard/schema/migrations".into(),
         });
+    }
+    if state.config.is_development() {
+        // Drift: what the migration files imply versus the catalog; files edited after applying.
+        let report = super::migrations::report(db, &tables, std::path::Path::new(".")).await;
+        out.extend(super::migrations::findings(&report));
     }
     jobs(state, &mut out).await;
     out.extend(custom_rules(state));

@@ -11,7 +11,7 @@
   {% if n_plus_one.is_empty() %}<p class="empty">None seen.{% if !d.ro %} The <a href="/dev/dashboard/lab">load lab</a>'s N+1 scenario shows what one looks like.{% endif %}</p>{% else %}
   <div class="scroll" tabindex="0" role="region" aria-label="Table"><table class="data-table">
     <thead><tr><th scope="col">Route</th><th scope="col">Statement</th><th scope="col" class="num">In one request</th><th scope="col" class="num">Requests</th><th scope="col">Last</th></tr></thead>
-    <tbody>{% for n in n_plus_one %}<tr class="flagged"><th scope="row"><a class="mono" href="{{ base }}/traces/{{ n.trace }}">{{ n.route }}</a></th><td><a href="{{ base }}/sql/{{ n.fp }}"><code>{{ n.sql }}</code></a></td><td class="num"><span class="badge tone-warn">{{ n.count }}×</span></td><td class="num">{{ n.times }}</td><td class="muted">{{ n.when }}</td></tr>{% endfor %}</tbody>
+    <tbody>{% for n in n_plus_one %}<tr class="flagged"><th scope="row"><a class="mono" href="{{ base }}/traces/{{ n.trace }}">{{ n.route }}</a></th><td><a href="{{ base }}/sql/{{ n.fp }}"><code>{{ n.sql }}</code></a></td><td class="num"><span class="badge tone-warn">{{ n.count }}×</span></td><td class="num">{{ n.times }}</td><td class="muted">{{ n.when }}{% if d.ai_on %} <a class="chip" href="{{ d.ask_href("sql", &n.fp) }}">Ask AI</a>{% endif %}</td></tr>{% endfor %}</tbody>
   </table></div>{% endif %}
 </section>
 
