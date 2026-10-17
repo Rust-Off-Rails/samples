@@ -4,7 +4,7 @@ Paste this to the agent working in your Rust off Rails app:
 
 ---
 
-Install the **dev-dashboard** sample from the Rust off Rails samples (`get_sample dev-dashboard` on the samples MCP server, or the `samples/dev-dashboard/` folder) into this app. It depends on no other sample.
+Install the **dev-dashboard** sample from the Rust off Rails samples (the `samples/dev-dashboard/` folder of github.com/Rust-Off-Rails/samples) into this app. It depends on no other sample.
 
 1. Read `samples/dev-dashboard/README.md` and `CHECKS.md` first.
 2. If this repo has `tools/install.sh`, run `tools/install.sh dev-dashboard .`; otherwise follow the README's "Install" steps by hand: `cargo add` the four crates (never with a version), copy `files/` keeping paths (replace `offrails_host` with this crate's name), then each wiring step at its `samples: <anchor>` comment or the spot the README describes. If the app has no `tracing layers`, `outer layers`, `hidden tabs`, `dev csp`, `kernel head` or `kernel main` anchor, apply that wiring by hand where the README says.

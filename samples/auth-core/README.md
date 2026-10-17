@@ -15,11 +15,17 @@ What you get (the Rails 8 generator, `phx.gen.auth` and Devise each cover part o
 
 Extracted from Rust off Rails apps and improved: the originals had sessions and return-to, but no rotation on re-auth, no absolute expiry, no device list, no audit trail, no security emails and no shared throttle.
 
-Guides: [`.offrails/guides/auth.md`](https://rustoffrails.org/docs/auth), [`.offrails/guides/security.md`](https://rustoffrails.org/docs/security). Depends on: [mailer](../mailer/) (the security emails) and [dev-mailbox](../dev-mailbox/) (the "check your mailbox" hint in development).
+Guides: [`.offrails/guides/auth.md`](https://rustoffrails.org/docs/guides/auth), [`.offrails/guides/security.md`](https://rustoffrails.org/docs/guides/security). Depends on: [mailer](../mailer/) (the security emails) and [dev-mailbox](../dev-mailbox/) (the "check your mailbox" hint in development).
 
-## Screenshots
+## Screens
 
-![The account security page, light, desktop](../../docs/screenshots/auth-core/account-light-desktop.png)
+<a href="../../docs/screenshots/auth-core/account-light-desktop.png"><picture><source media="(prefers-color-scheme: dark)" srcset="../../docs/screenshots/auth-core/account-dark-desktop.png"><img src="../../docs/screenshots/auth-core/account-light-desktop.png" alt="The account security page: email, methods, devices, recent activity" width="860"></picture></a>
+
+<table>
+<tr><td valign="top"><a href="../../docs/screenshots/auth-core/sign-in-light-desktop.png"><picture><source media="(prefers-color-scheme: dark)" srcset="../../docs/screenshots/auth-core/sign-in-dark-desktop.png"><img src="../../docs/screenshots/auth-core/sign-in-light-desktop.png" alt="Sign in with every method installed" width="420"></picture></a><br><sub>Sign in (every method installed)</sub></td><td valign="top"><a href="../../docs/screenshots/auth-core/confirm-light-desktop.png"><picture><source media="(prefers-color-scheme: dark)" srcset="../../docs/screenshots/auth-core/confirm-dark-desktop.png"><img src="../../docs/screenshots/auth-core/confirm-light-desktop.png" alt="Confirm it's you before a sensitive action" width="420"></picture></a><br><sub>Confirm it's you (re-auth)</sub></td></tr>
+</table>
+
+<sub>Light or dark follows your GitHub theme; click an image for full size.</sub>
 
 | Screen | Light | Dark |
 |--------|-------|------|
@@ -34,7 +40,7 @@ Regenerate with `node samples/auth-core/screenshots.mjs` against the demo (see t
 
 ## Install
 
-Through the samples MCP server: `get_sample auth-password` (or `auth-magic-link`), which brings this one. By hand, in the app root, after [dev-mailbox](../dev-mailbox/):
+By hand, in the app root, after [dev-mailbox](../dev-mailbox/):
 
 1. `cargo add hmac` (never with a version; read the resolved one in `Cargo.lock`).
 2. Copy `files/` into the app, keeping the paths. Replace `offrails_host` with your crate name in the test file.

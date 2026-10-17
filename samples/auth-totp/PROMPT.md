@@ -4,7 +4,7 @@ Paste this to the agent working in your Rust off Rails app:
 
 ---
 
-Install the **auth-totp** sample (two-factor authentication) from the Rust off Rails samples (`get_sample auth-totp` on the samples MCP server, or the `samples/auth-totp/` folder) into this app. The app must already have **auth-core** and a sign-in method (**auth-password** and/or **auth-magic-link**); install those first if `docs/decisions.md` doesn't list them.
+Install the **auth-totp** sample (two-factor authentication) from the Rust off Rails samples (the `samples/auth-totp/` folder of github.com/Rust-Off-Rails/samples) into this app. The app must already have **auth-core** and a sign-in method (**auth-password** and/or **auth-magic-link**); install those first if `docs/decisions.md` doesn't list them.
 
 1. Read `samples/auth-totp/README.md` and `CHECKS.md` first.
 2. If this repo has `tools/install.sh`, run `tools/install.sh auth-totp .`. Otherwise follow the README's "Install" steps by hand: the three `cargo add` lines (no versions), copy `files/` keeping paths (replace `offrails_host` with this crate's name), then each wiring step at its `samples: <anchor>` comment (several are in auth-core's files: `before sign in`, `step-up second factor`, `revoke everything`, `revoke other access`, the account page and "Confirm it's you").

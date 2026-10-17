@@ -23,11 +23,18 @@ Everything your app is doing, live, at **`/dev/dashboard`**: memory, CPU, reques
 - **It costs little**: about 1 µs per request for the middleware in a release build, 6 µs for a whole development request with its SQL recorded (see [How it works](#how-it-works)), fixed-size memory (a test pushes 20,000 requests and 5,000 statements through it and checks every bound), nothing at all outside development unless you turn on the production view.
 - **Development only** by default (404 in production, proven by a test). Optionally a **read-only** subset at `/admin/dashboard` in production, behind the admin password or your admin accounts: no load lab, no EXPLAIN, no parameters, no logs, and traces without their log events or span fields (and Ask AI only with `DASHBOARD_AI_IN_PRODUCTION=true`).
 
-Guides: [`.offrails/guides/dev-tools.md`](https://rustoffrails.org/docs/dev-tools) · [`errors-and-logging.md`](https://rustoffrails.org/docs/errors-and-logging) · [`database.md`](https://rustoffrails.org/docs/database) · [`testing.md`](https://rustoffrails.org/docs/testing) · [`security.md`](https://rustoffrails.org/docs/security).
+Guides: [`.offrails/guides/dev-tools.md`](https://rustoffrails.org/docs/guides/dev-tools) · [`errors-and-logging.md`](https://rustoffrails.org/docs/guides/errors-and-logging) · [`database.md`](https://rustoffrails.org/docs/guides/database) · [`testing.md`](https://rustoffrails.org/docs/guides/testing) · [`security.md`](https://rustoffrails.org/docs/guides/security).
 
-## Screenshots
+## Screens
 
-![The overview with live cards, insights, slowest routes and queries, light, desktop](../../docs/screenshots/dev-dashboard/overview-light-desktop.png)
+<a href="../../docs/screenshots/dev-dashboard/overview-light-desktop.png"><picture><source media="(prefers-color-scheme: dark)" srcset="../../docs/screenshots/dev-dashboard/overview-dark-desktop.png"><img src="../../docs/screenshots/dev-dashboard/overview-light-desktop.png" alt="The dev dashboard overview: live cards with sparklines, insights, slowest routes and queries" width="860"></picture></a>
+
+<table>
+<tr><td valign="top"><a href="../../docs/screenshots/dev-dashboard/charts-readout-light-desktop.png"><picture><source media="(prefers-color-scheme: dark)" srcset="../../docs/screenshots/dev-dashboard/charts-readout-dark-desktop.png"><img src="../../docs/screenshots/dev-dashboard/charts-readout-light-desktop.png" alt="Live charts with a synchronized crosshair readout" width="420"></picture></a><br><sub>Charts, one crosshair across all</sub></td><td valign="top"><a href="../../docs/screenshots/dev-dashboard/ai-run-done-light-desktop.png"><picture><source media="(prefers-color-scheme: dark)" srcset="../../docs/screenshots/dev-dashboard/ai-run-done-dark-desktop.png"><img src="../../docs/screenshots/dev-dashboard/ai-run-done-light-desktop.png" alt="An Ask AI investigation of an N+1: citations, an inline chart, the fix and a test" width="420"></picture></a><br><sub>Ask AI: an N+1 investigated, with the fix</sub></td></tr>
+<tr><td valign="top"><a href="../../docs/screenshots/dev-dashboard/erd-focus-light-desktop.png"><picture><source media="(prefers-color-scheme: dark)" srcset="../../docs/screenshots/dev-dashboard/erd-focus-dark-desktop.png"><img src="../../docs/screenshots/dev-dashboard/erd-focus-light-desktop.png" alt="The schema diagram with a table in focus" width="420"></picture></a><br><sub>Schema diagram (ERD)</sub></td><td valign="top"><a href="../../docs/screenshots/dev-dashboard/waterfall-light-desktop.png"><picture><source media="(prefers-color-scheme: dark)" srcset="../../docs/screenshots/dev-dashboard/waterfall-dark-desktop.png"><img src="../../docs/screenshots/dev-dashboard/waterfall-light-desktop.png" alt="A request's trace waterfall" width="420"></picture></a><br><sub>Trace waterfall</sub></td></tr>
+</table>
+
+<sub>Light or dark follows your GitHub theme; click an image for full size.</sub>
 
 | Screen | Light | Dark |
 |--------|-------|------|
@@ -67,7 +74,7 @@ All data in them is synthetic: the hour of demo history (badged "demo data"), fa
 
 ## Install
 
-Through the samples MCP server: `get_sample dev-dashboard`. Or by hand, in the app root:
+By hand, in the app root:
 
 1. Crates (`cargo add`, never with a version): `sysinfo --no-default-features --features system`, `quick-xml`, `reqwest --no-default-features --features rustls,json,http2`, `tower --features util`.
 2. Copy `files/` into the app, keeping the paths (`.config/nextest.toml` included). In the test file and the `main.rs` wiring, replace `offrails_host` with your crate name.

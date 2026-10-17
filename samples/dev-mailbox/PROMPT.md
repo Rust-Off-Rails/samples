@@ -4,7 +4,7 @@ Paste this to the agent working in your Rust off Rails app:
 
 ---
 
-Install the **dev-mailbox** sample from the Rust off Rails samples (`get_sample dev-mailbox` on the samples MCP server, or the `samples/dev-mailbox/` folder) into this app. It needs the **mailer** sample; install that first if `src/kernel/mailer.rs` doesn't exist.
+Install the **dev-mailbox** sample from the Rust off Rails samples (the `samples/dev-mailbox/` folder of github.com/Rust-Off-Rails/samples) into this app. It needs the **mailer** sample; install that first if `src/kernel/mailer.rs` doesn't exist.
 
 1. Read `samples/dev-mailbox/README.md` and `CHECKS.md` first.
 2. If this repo has `tools/install.sh`, run `tools/install.sh dev-mailbox .`; otherwise follow the README's "Install" steps by hand: copy `files/` keeping paths (replace `offrails_host` with this crate's name), then each wiring step at its `samples: <anchor>` comment or the spot the README describes.

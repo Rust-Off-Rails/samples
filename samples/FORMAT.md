@@ -47,7 +47,7 @@ pub mod mailbox_web;
 |-----|----------|---------|
 | `name` | yes | The folder name |
 | `version` | yes | The samples release it belongs to (proven against the framework in `FRAMEWORK_VERSION`) |
-| `summary` | yes | One line, shown in listings and the MCP `list_samples` |
+| `summary` | yes | One line, shown in listings (and in the planned samples MCP tools) |
 | `depends_on` | yes (may be `[]`) | Samples this one needs, installed first |
 | `extracted_from` | yes | Where the code came from, in public words ("Rust off Rails apps") |
 | `crates` | yes (may be `[]`) | `cargo add` argument lines |
@@ -155,7 +155,7 @@ Samples are read and adapted by models of every size. These markers tell a model
 - In templates use `{# APP: … #}` (Askama), in CSS `/* APP: … */`, in shell and TOML `# APP: …`.
 - Dense where it matters, absent where the code is obvious. Never narrate what the next line does.
 - Every `// SECURITY:` marker ends with `(test: <name>)`, and every `(test: <name>)` (in SECURITY and INVARIANT markers, and every test named in a CHECKS.md table) names a test that exists. `tools/security-check.sh` fails otherwise.
-- READMEs link guides by their public URL too: `https://rustoffrails.org/docs/<guide>` (e.g. `https://rustoffrails.org/docs/mailers`).
+- READMEs link guides by their public URL too: `https://rustoffrails.org/docs/guides/<guide>` (e.g. `https://rustoffrails.org/docs/guides/mailers`).
 
 ## Theming
 
@@ -184,12 +184,12 @@ Kernel pages (and the app layout and error pages) have one theme: System, Light 
 Sections, in this order:
 
 1. **Title and one paragraph**: what it is, what it replaces (Rails/Phoenix), what it depends on, "extracted from Rust off Rails apps".
-2. **Screenshots**: the light desktop screenshot inline, links to the rest (`docs/screenshots/<sample>/`).
-3. **Install**: `get_sample` through the MCP server, or by hand: the exact numbered procedure (crates, copy `files/`, each wiring step in words with its file, then `cargo fmt`, `cargo run -- routes`, the Definition of Done). `tools/install.sh <sample> <app>` is the mechanical version.
+2. **Screens**: the key screens inline as `<picture>` elements (dark source under `prefers-color-scheme: dark`, light `<img>` with a `width`, each linking to the full image), then a table linking every screenshot (`docs/screenshots/<sample>/`).
+3. **Install**: by hand: the exact numbered procedure (crates, copy `files/`, each wiring step in words with its file, then `cargo fmt`, `cargo run -- routes`, the Definition of Done). `tools/install.sh <sample> <app>` is the mechanical version.
 4. **After installing**: what the agent must still do in the app (env vars in the deploy config, `docs/decisions.md`, the `AGENTS.md` header line).
 5. **Adapting it**: 3 to 6 common variations as short recipes (e.g. "add an SMTP provider", "show the mailbox in production behind admin access"), each naming the `// APP:` lines it touches.
 6. **Do not change**: the invariants, each with the test that guards it.
-7. **How it works**: the design in a few paragraphs, with the routes table and the guide links (`.offrails/guides/…` and `https://rustoffrails.org/docs/…`).
+7. **How it works**: the design in a few paragraphs, with the routes table and the guide links (`.offrails/guides/…` and `https://rustoffrails.org/docs/guides/…`).
 8. **Files**: one line per file.
 
 ## PROMPT.md

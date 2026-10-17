@@ -4,7 +4,7 @@ Paste this to the agent working in your Rust off Rails app:
 
 ---
 
-Install the **mailer** sample from the Rust off Rails samples (`get_sample mailer` on the samples MCP server, or the `samples/mailer/` folder) into this app.
+Install the **mailer** sample from the Rust off Rails samples (the `samples/mailer/` folder of github.com/Rust-Off-Rails/samples) into this app.
 
 1. Read `samples/mailer/README.md` and `CHECKS.md` first.
 2. If this repo has `tools/install.sh`, run `tools/install.sh mailer .`; otherwise follow the README's "Install" steps by hand: the `cargo add` line (no version), copy `files/` keeping paths (replace `offrails_host` with this crate's name), then each wiring step at its `samples: <anchor>` comment or the spot the README describes.

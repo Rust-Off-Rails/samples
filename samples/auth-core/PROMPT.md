@@ -4,7 +4,7 @@ You rarely install this one directly: [auth-password](../auth-password/PROMPT.md
 
 ---
 
-Install the **auth-core** sample from the Rust off Rails samples (`get_sample auth-core` on the samples MCP server, or the `samples/auth-core/` folder) into this app.
+Install the **auth-core** sample from the Rust off Rails samples (the `samples/auth-core/` folder of github.com/Rust-Off-Rails/samples) into this app.
 
 1. Read `samples/auth-core/README.md` and `CHECKS.md` first. It needs the `dev-mailbox` sample (and so `mailer`); install those first if `docs/decisions.md` doesn't list them.
 2. If this repo has `tools/install.sh`, run `tools/install.sh auth-core .`; otherwise follow the README's "Install" steps by hand: `cargo add hmac` (no version), copy `files/` keeping paths (replace `offrails_host` with this crate's name), then each wiring step at its `samples: <anchor>` comment.

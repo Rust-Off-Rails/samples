@@ -1,6 +1,6 @@
 # Rust off Rails samples: plan for 0.7.0
 
-These are tested reference implementations of the parts every Rust off Rails app needs. The framework only **points at** them; nothing here is mandatory. An agent copies a sample into its app and adapts it, and from then on the app owns that code. Every sample is versioned with the framework (tag `v0.7.0`) and served from rustoffrails.org/samples and the site's MCP server (`list_samples`, `get_sample`, `diff_sample`).
+These are tested reference implementations of the parts every Rust off Rails app needs. The framework only **points at** them; nothing here is mandatory. An agent copies a sample into its app and adapts it, and from then on the app owns that code. Every sample is versioned with the framework (tag `v0.7.0`). Serving them from rustoffrails.org/samples and the site's MCP server (`list_samples`, `get_sample`, `diff_sample`) is planned, not live yet (step 4).
 
 ## Layout
 
@@ -38,7 +38,7 @@ tools/ci.sh           For each sample, and for "all": fresh copy of host/ + inst
    - auth-password + auth-magic-link + auth-totp;
    - realtime.
 3. **Framework 0.7.0:** each relevant guide gets a one-line optional pointer, `generators/new.md` gets an optional "head start" step, `CHANGELOG`, and an `offrails-check` hint.
-4. **Website:** `/samples` pages, a raw `.tar.gz` per sample with a checksum, MCP tools `list_samples` / `get_sample` / `diff_sample`, and checksum-verified fetching per release.
+4. **Website (not done yet; coming after the release):** `/samples` pages, a raw `.tar.gz` per sample with a checksum, MCP tools `list_samples` / `get_sample` / `diff_sample`, and checksum-verified fetching per release.
 5. **Release** framework 0.7.0 and samples v0.7.0.
 
 ## Rules

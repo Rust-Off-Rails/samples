@@ -4,7 +4,7 @@ Paste this to the agent working in your Rust off Rails app:
 
 ---
 
-Install the **jobs** sample from the Rust off Rails samples (`get_sample jobs` on the samples MCP server, or the `samples/jobs/` folder) into this app. It has no dependencies.
+Install the **jobs** sample from the Rust off Rails samples (the `samples/jobs/` folder of github.com/Rust-Off-Rails/samples) into this app. It has no dependencies.
 
 1. Read `samples/jobs/README.md` and `CHECKS.md` first, and `.offrails/guides/jobs.md`.
 2. If this repo has `tools/install.sh`, run `tools/install.sh jobs .`; otherwise follow the README's "Install" steps by hand: `cargo add croner`, copy `files/` keeping paths (replace `offrails_host` with this crate's name), then each wiring step at its `samples: <anchor>` comment or the spot the README describes.

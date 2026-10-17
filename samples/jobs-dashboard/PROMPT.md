@@ -4,7 +4,7 @@ Paste this to the agent working in your Rust off Rails app:
 
 ---
 
-Install the **jobs-dashboard** sample from the Rust off Rails samples (`get_sample jobs-dashboard` on the samples MCP server, or the `samples/jobs-dashboard/` folder) into this app. It needs the **jobs** sample; install that first if `src/kernel/jobs/mod.rs` doesn't exist.
+Install the **jobs-dashboard** sample from the Rust off Rails samples (the `samples/jobs-dashboard/` folder of github.com/Rust-Off-Rails/samples) into this app. It needs the **jobs** sample; install that first if `src/kernel/jobs/mod.rs` doesn't exist.
 
 1. Read `samples/jobs-dashboard/README.md` and `CHECKS.md` first, and `.offrails/guides/jobs-dashboard.md`.
 2. If this repo has `tools/install.sh`, run `tools/install.sh jobs-dashboard .`; otherwise follow the README's "Install" steps by hand: copy `files/` keeping paths (replace `offrails_host` with this crate's name), then each wiring step at its `samples: <anchor>` comment or the spot the README describes.

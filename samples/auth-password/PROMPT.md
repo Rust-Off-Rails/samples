@@ -4,7 +4,7 @@ Paste this to the agent working in your Rust off Rails app:
 
 ---
 
-Install the **auth-password** sample from the Rust off Rails samples (`get_sample auth-password` on the samples MCP server, or the `samples/auth-password/` folder) into this app. It brings **auth-core** (sessions, account page, re-auth, security emails), and needs **dev-mailbox** and **mailer**.
+Install the **auth-password** sample from the Rust off Rails samples (the `samples/auth-password/` folder of github.com/Rust-Off-Rails/samples) into this app. It brings **auth-core** (sessions, account page, re-auth, security emails), and needs **dev-mailbox** and **mailer**.
 
 1. Read `samples/auth-password/README.md` and `CHECKS.md`, and `samples/auth-core/README.md` and `CHECKS.md`, first.
 2. If this repo has `tools/install.sh`, run `tools/install.sh auth-password .` (it installs auth-core first). Otherwise follow both READMEs' "Install" steps by hand, auth-core first: the `cargo add` lines (no versions), copy each `files/` keeping paths (replace `offrails_host` with this crate's name), then each wiring step at its `samples: <anchor>` comment.

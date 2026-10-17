@@ -4,7 +4,7 @@ Paste this to the agent working in your Rust off Rails app:
 
 ---
 
-Install the **realtime** sample from the Rust off Rails samples (`get_sample realtime` on the samples MCP server, or the `samples/realtime/` folder) into this app: channels over WebSocket (`offrails.v1`) with SSE and long-poll fallbacks, topic authorization, presence, resume, socket tokens, `/dev/sockets` and a live room demo.
+Install the **realtime** sample from the Rust off Rails samples (the `samples/realtime/` folder of github.com/Rust-Off-Rails/samples) into this app: channels over WebSocket (`offrails.v1`) with SSE and long-poll fallbacks, topic authorization, presence, resume, socket tokens, `/dev/sockets` and a live room demo.
 
 1. Read `samples/realtime/README.md` and `CHECKS.md` first, and `.offrails/guides/channels.md`.
 2. If this repo has `tools/install.sh`, run `tools/install.sh realtime .`; otherwise follow the README's "Install" steps by hand: the three `cargo add` lines, copy `files/` keeping paths (replace `offrails_host` with this crate's name), then each wiring step at its `samples: <anchor>` comment or the spot the README describes.
