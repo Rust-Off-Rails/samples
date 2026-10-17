@@ -97,7 +97,10 @@ pub fn spawn(state: AppState) {
         return;
     }
     tokio::spawn(async move {
-        let mut every = tokio::time::interval(WATCH_EVERY);
+        // WHY: the first look one interval after boot: the charts have a baseline by then, and a
+        // local provider started alongside the app is up.
+        let mut every =
+            tokio::time::interval_at(tokio::time::Instant::now() + WATCH_EVERY, WATCH_EVERY);
         every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             every.tick().await;

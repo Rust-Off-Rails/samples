@@ -1563,9 +1563,15 @@ fn the_ai_base_url_is_https_or_loopback() {
 #[tokio::test]
 async fn the_ai_assistant_is_404_in_production_unless_enabled_behind_the_gate() {
     let app = TestApp::with_config(production(gated())).await;
+    assert!(
+        ai_web::bar("/dev").is_none(),
+        "no Ask AI bar outside development"
+    );
     for path in [
         "/admin/dashboard/ai?tab=overview",
+        "/admin/dashboard/ai/history",
         "/dev/dashboard/ai?tab=overview",
+        "/dev/dashboard/ai/history",
     ] {
         let res = app
             .get_with_headers(path, &[("authorization", &basic(ADMIN_PASSWORD))])

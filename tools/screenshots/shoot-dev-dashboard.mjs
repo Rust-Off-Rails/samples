@@ -18,7 +18,8 @@ const axeSource = readFileSync(new URL("./node_modules/axe-core/axe.min.js", imp
 // reopened in the next), and at most 5 runs a minute (the dashboard allows 6, PER_MINUTE).
 const OWNER = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
 let lastRun = "/dev/dashboard/ai/history";
-const runsAt = [];
+// The AI server's watcher may start up to four investigations of its own in its first minute.
+const runsAt = [Date.now(), Date.now(), Date.now(), Date.now()];
 const throttle = async () => {
   const minute = () => runsAt.filter((t) => Date.now() - t < 61_000);
   while (minute().length >= 5) await new Promise((r) => setTimeout(r, 2_000));
@@ -91,6 +92,10 @@ const screens = [
   // chart, a proposed action, the fix prompt), the history, an incident card, the bar on the
   // mailbox and jobs pages. "What am I looking at?" needs no key.
   ["ai-explain", async () => "/dev/dashboard/explain"],
+  ["ai-incident", async () => "/dev/dashboard/insights", async (page) => {
+    await page.locator("#incidents .incident-story").first().waitFor({ timeout: 120_000 });
+    await page.locator("#incidents").scrollIntoViewIfNeeded();
+  }, { base: AI_BASE }],
   ["ai-health", async () => "/dev/dashboard", async (page) => {
     await throttle();
     await page.locator("#health [data-ai-send]").click();
@@ -112,10 +117,6 @@ const screens = [
     await page.locator(".ai-end").scrollIntoViewIfNeeded();
   }, { base: AI_BASE }],
   ["ai-history", async () => "/dev/dashboard/ai/history", null, { base: AI_BASE }],
-  ["ai-incident", async () => "/dev/dashboard/insights", async (page) => {
-    await page.locator("#incidents .incident-story").first().waitFor({ timeout: 120_000 });
-    await page.locator("#incidents").scrollIntoViewIfNeeded();
-  }, { base: AI_BASE }],
   ["ai-mailbox", async () => "/dev/mailbox", async (page) => {
     await page.locator(".ai-bar > summary").click();
     await page.locator(".ai-bar [data-ai-prompt]").first().click();
