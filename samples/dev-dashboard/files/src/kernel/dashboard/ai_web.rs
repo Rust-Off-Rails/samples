@@ -58,6 +58,7 @@ pub fn routes(base: &'static str) -> Router<AppState> {
         .route(&p("/ai/runs"), post(ai_runs))
         .route(&p("/ai/runs/{id}"), get(run_page))
         .route(&p("/ai/runs/{id}/stream"), get(run_stream))
+        .route(&p("/ai/runs/{id}/continue"), post(run_continue))
         .route(&p("/ai/history"), get(history_page))
 }
 
@@ -124,6 +125,8 @@ pub struct AiQuery {
     /// A kernel page's path (the Ask AI bar): resolved with `Tab::for_page`.
     page: Option<String>,
     wait: Option<String>,
+    /// The run stream's first step to send (the ones before are on the page).
+    from: Option<usize>,
 }
 
 /// The panel: how to enable it, or the prepared first request's preview, the prompts, the form.
@@ -184,6 +187,8 @@ pub struct RunView {
     pub fix_prompt: String,
     pub sent: String,
     pub when: String,
+    /// The answer was cut and the run is in memory: the Continue button shows.
+    pub can_continue: bool,
 }
 
 impl RunView {
@@ -208,6 +213,7 @@ impl RunView {
             fix_prompt: String::new(),
             sent: String::new(),
             when: String::new(),
+            can_continue: false,
         }
     }
 }
@@ -276,8 +282,9 @@ pub fn run_view(rec: &Record, live: bool) -> RunView {
     RunView {
         id: rec.id.clone(),
         live,
+        // `from`: the steps the page already shows, so the stream doesn't repeat them.
         stream: if live {
-            format!("{base}/ai/runs/{}/stream", rec.id)
+            format!("{base}/ai/runs/{}/stream?from={}", rec.id, rec.steps.len())
         } else {
             String::new()
         },
@@ -316,6 +323,7 @@ pub fn run_view(rec: &Record, live: bool) -> RunView {
         fix_prompt: ai_agent::fix_prompt(rec).unwrap_or_default(),
         sent: rec.sent.clone(),
         when: ui::ago(rec.started, chrono::Utc::now()),
+        can_continue: !live && rec.cut && ai_agent::get(&rec.id).is_some_and(|r| r.can_continue()),
         base,
     }
 }
@@ -449,15 +457,24 @@ fn resolve(q: &AiQuery, default_tab: Option<&str>) -> Result<(Tab, Option<String
 }
 
 /// The first request's body for a prepared context (the preview, and the first call).
-fn first_body(state: &AppState, mode: Mode, p: &ai::Prepared, question: &str) -> serde_json::Value {
+pub fn first_body(
+    state: &AppState,
+    mode: Mode,
+    p: &ai::Prepared,
+    question: &str,
+) -> serde_json::Value {
     let cfg = &state.config.dashboard.ai;
     let tools = super::ai_tools::enabled(mode.ro, cfg.tools_core);
-    ai::request(
+    ai::cached(
         cfg,
-        &p.system,
-        &[ai::user_turn(&ai::user_message(p, question))],
-        &super::ai_tools::definitions(cfg.provider, &tools),
-        ai::ToolChoice::Auto,
+        ai::request(
+            cfg,
+            &p.system,
+            &[ai::user_turn(&ai::user_message(p, question))],
+            &super::ai_tools::definitions(cfg.provider, &tools),
+            ai::ToolChoice::Auto,
+        ),
+        false,
     )
 }
 
@@ -489,7 +506,7 @@ pub async fn panel_for(
         truncated: false,
         suggestions: tab.suggestions(item.is_some()),
         question,
-        left: lock(&ai::BUDGET).left(ai::today()),
+        left: ai::budget(cfg).left(ai::today()),
         error,
         tools: tools.iter().map(|t| (t.name, t.title)).collect(),
         max_steps: ai::MAX_STEPS,
@@ -782,6 +799,7 @@ async fn run_stream(
     State(state): State<AppState>,
     Extension(mode): Extension<Mode>,
     Path(id): Path<String>,
+    Query(q): Query<AiQuery>,
     headers: HeaderMap,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AppError> {
     if !ai::allowed(&state.config, mode.ro) || !ai_agent::valid_id(&id) {
@@ -792,6 +810,7 @@ async fn run_stream(
         .get("last-event-id")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse().ok())
+        .or(q.from)
         .unwrap_or(0);
     let rx = run.subscribe();
     let s = futures::stream::unfold(
@@ -834,6 +853,36 @@ async fn run_stream(
         },
     );
     Ok(Sse::new(s).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+}
+
+/// `POST {base}/ai/runs/{id}/continue`: one more call for a cut answer, in the same run (its
+/// browser only, like the stream). With the script it answers the run's live fragment; without,
+/// it redirects to the run's page, which waits for the end.
+async fn run_continue(
+    State(state): State<AppState>,
+    Extension(mode): Extension<Mode>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    if !ai::allowed(&state.config, mode.ro) || !ai_agent::valid_id(&id) {
+        return Err(AppError::NotFound);
+    }
+    let run = owned_run(&headers, &id).ok_or(AppError::NotFound)?;
+    if run.record().base != mode.base {
+        return Err(AppError::NotFound);
+    }
+    let view = match ai_agent::continue_run(&state, &run) {
+        Ok(()) => run_view(&run.record(), true),
+        Err(e) => {
+            let mut v = run_view(&run.record(), false);
+            v.error = Some(e.message());
+            v
+        }
+    };
+    if headers.contains_key("x-dashboard-fragment") {
+        return Ok(ui::page(RunFragment { r: view }));
+    }
+    Ok(Redirect::to(&format!("{}/ai/runs/{id}?wait=1", mode.base)).into_response())
 }
 
 /// `GET {base}/ai/history`: past runs, newest first (live ones included).
@@ -901,84 +950,7 @@ pub async fn explain_page(
     })
 }
 
-// ---- the overview's health, digest and incidents ------------------------------------------------
-
-/// The overview's Health panel: a deterministic verdict, and the summary form when a provider
-/// is set (its preview is the overview's prepared context).
-pub struct HealthView {
-    pub verdict: &'static str,
-    pub tone: &'static str,
-    pub reasons: Vec<String>,
-    pub ai: bool,
-    pub configured: bool,
-    pub prepared: String,
-    pub preview: String,
-    pub base: &'static str,
-}
-
-pub async fn health_view(
-    state: &AppState,
-    mode: Mode,
-    cards: &[super::web::Card],
-    high: usize,
-    medium: usize,
-) -> HealthView {
-    let red: Vec<&str> = cards
-        .iter()
-        .filter(|c| c.tone == "err")
-        .map(|c| c.label)
-        .collect();
-    let amber: Vec<&str> = cards
-        .iter()
-        .filter(|c| c.tone == "warn")
-        .map(|c| c.label)
-        .collect();
-    let idle = cards.iter().all(|c| c.tone == "idle" || c.key == "uptime");
-    let (verdict, tone) = if idle {
-        ("No traffic yet", "idle")
-    } else if !red.is_empty() || high > 0 {
-        ("Unhealthy", "err")
-    } else if !amber.is_empty() || medium > 0 {
-        ("Needs attention", "warn")
-    } else {
-        ("Healthy", "ok")
-    };
-    let mut reasons = Vec::new();
-    if !red.is_empty() {
-        reasons.push(format!("Red: {}", red.join(", ")));
-    }
-    if !amber.is_empty() {
-        reasons.push(format!("Amber: {}", amber.join(", ")));
-    }
-    if high + medium > 0 {
-        reasons.push(format!("{high} high and {medium} medium findings"));
-    }
-    if reasons.is_empty() && !idle {
-        reasons.push("Every card is green and nothing important is flagged.".into());
-    }
-    let ai_on = ai::allowed(&state.config, mode.ro);
-    let configured = state.config.dashboard.ai.provider.is_some();
-    let mut v = HealthView {
-        verdict,
-        tone,
-        reasons,
-        ai: ai_on,
-        configured,
-        prepared: String::new(),
-        preview: String::new(),
-        base: mode.base,
-    };
-    if ai_on && configured {
-        let ctx = http::quietly(ai_context::build(state, mode.ro, Tab::Overview, None))
-            .await
-            .unwrap_or_default();
-        let p = ai::store(Tab::Overview, None, ctx);
-        v.preview = serde_json::to_string_pretty(&first_body(state, mode, &p, ai::HEALTH_QUESTION))
-            .unwrap_or_default();
-        v.prepared = p.id;
-    }
-    v
-}
+// ---- the overview's incidents and digest (the command center is ai_home.rs) ------------------------------------------------
 
 pub struct IncidentView {
     pub id: String,

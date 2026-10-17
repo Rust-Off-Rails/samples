@@ -125,6 +125,10 @@ pub struct Dash {
     pub ai_item: String,
     /// The assistant is available here (so "Ask about this" links show).
     pub ai_on: bool,
+    /// The panel's one-line "what this tab tells you" and its suggested questions (shown before
+    /// the panel loads, and without JavaScript as links).
+    pub ai_guide: &'static str,
+    pub ai_prompts: &'static [&'static str],
 }
 
 impl Dash {
@@ -138,6 +142,8 @@ impl Dash {
         self.ai_on = ai::allowed(config, self.ro);
         if self.ai_on && (!self.ro || tab.in_read_only()) {
             self.ai_tab = tab.key();
+            self.ai_guide = tab.guide_line();
+            self.ai_prompts = tab.suggestions(item.is_some());
             self.ai_item = item.unwrap_or_default();
         }
         self
@@ -182,6 +188,8 @@ pub(super) fn dash(mode: Mode, page: &str, live: Option<String>, refresh: u64) -
         ai_tab: "",
         ai_item: String::new(),
         ai_on: false,
+        ai_guide: "",
+        ai_prompts: &[],
     }
 }
 
@@ -557,8 +565,7 @@ struct OverviewPage {
     traces: Vec<TraceRow>,
     findings: Vec<FindingView>,
     finding_total: usize,
-    empty: bool,
-    health: super::ai_web::HealthView,
+    cc: super::ai_home::CommandCenter,
     digest: super::ai_watch::Digest,
     incidents: Vec<super::ai_web::IncidentView>,
 }
@@ -615,8 +622,8 @@ async fn overview(
             .take(8)
             .collect::<Vec<_>>(),
     );
-    let (findings, finding_total, high, medium) = if mode.ro {
-        (Vec::new(), 0, 0, 0)
+    let (findings, finding_total, brief) = if mode.ro {
+        (Vec::new(), 0, Vec::new())
     } else {
         let dismissed = dismissed(&headers);
         let all: Vec<FindingView> = all_findings(&state, &dismissed)
@@ -625,13 +632,12 @@ async fn overview(
             .filter(|f| !f.dismissed)
             .collect();
         let n = all.len();
-        let sev = |s: &str| all.iter().filter(|f| f.severity == s).count();
-        let (high, medium) = (sev("high"), sev("medium"));
-        (all.into_iter().take(3).collect(), n, high, medium)
+        let brief = all.iter().map(super::ai_home::finding_of).collect();
+        (all.into_iter().take(3).collect(), n, brief)
     };
-    let empty = lock(&HUB.http).is_empty();
     let cards = cards(mode);
-    let health = super::ai_web::health_view(&state, mode, &cards, high, medium).await;
+    let owner = cookie::get(&headers, super::ai_agent::OWNER_COOKIE);
+    let cc = super::ai_home::build(&state, mode, brief, owner.as_deref()).await;
     // "Since you were away": this browser's last visit (a cookie), then now.
     let (seen, seen_cookie) = super::ai_web::seen(&headers, state.config.is_production());
     let digest = super::ai_watch::digest(seen, Utc::now().timestamp());
@@ -642,8 +648,7 @@ async fn overview(
             "",
             Some(format!("{}/stream?view=overview", mode.base)),
             1,
-        )
-        .ai(&state.config, ai::Tab::Overview, None),
+        ),
         cards,
         panels: if mode.ro {
             Vec::new()
@@ -656,8 +661,7 @@ async fn overview(
         traces,
         findings,
         finding_total,
-        empty,
-        health,
+        cc,
         digest,
         incidents: if mode.ro {
             Vec::new()

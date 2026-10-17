@@ -175,7 +175,7 @@ async fn investigate(state: &AppState, s: &Signal) -> (Option<String>, String) {
         }
         w.investigations.push_back(Instant::now());
     }
-    if let Err(e) = lock(&ai::BUDGET).reserve(ai::today(), Instant::now()) {
+    if let Err(e) = ai::budget(&state.config.dashboard.ai).reserve(ai::today(), Instant::now()) {
         return (None, format!("Not investigated: {}", e.message()));
     }
     let context = ai_context_for(state, s.tab).await;

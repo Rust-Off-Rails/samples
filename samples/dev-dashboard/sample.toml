@@ -173,7 +173,7 @@ pub enum AiProvider {
 }
 
 /// The dashboard's optional "Ask AI" assistant: env only, never stored, never shown back.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct DashboardAi {
     /// `DASHBOARD_AI_PROVIDER=anthropic|openai-compatible`; unset: no assistant.
     pub provider: Option<AiProvider>,
@@ -195,10 +195,73 @@ pub struct DashboardAi {
     /// headers (`HTTP-Referer`, `X-Title`), sent to OpenAI-compatible providers.
     pub referer: Option<String>,
     pub title: Option<String>,
+    /// `DASHBOARD_AI_DAILY_QUESTIONS`: runs a day (default `ai::DAILY_REQUESTS`).
+    pub daily_questions: u32,
+    /// `DASHBOARD_AI_DAILY_TOKENS`: tokens a day, in and out (default `ai::DAILY_TOKENS`).
+    pub daily_tokens: u64,
+    /// `DASHBOARD_AI_RUN_MAX_TOKENS`: tokens one run may use (default `ai::RUN_TOKENS`).
+    pub run_max_tokens: u64,
+    /// `DASHBOARD_AI_MAX_ANSWER_TOKENS`: one answer's length cap (`max_tokens`; default
+    /// `ai::MAX_ANSWER_TOKENS`). A cut answer gets a Continue button.
+    pub max_answer_tokens: u32,
+    /// `DASHBOARD_AI_PRICE_IN`, `DASHBOARD_AI_PRICE_OUT`: the model's USD per million input and
+    /// output tokens (from the provider's price list), for the "spent today" estimate.
+    pub price_in: Option<f64>,
+    pub price_out: Option<f64>,
+    /// `DASHBOARD_AI_DAILY_USD`: stop for the day once the estimate reaches this (needs both prices).
+    pub daily_usd: Option<f64>,
+}
+
+impl Default for DashboardAi {
+    fn default() -> Self {
+        Self {
+            provider: None,
+            api_key: None,
+            base_url: String::new(),
+            model: String::new(),
+            in_production: false,
+            proactive: false,
+            tools_core: false,
+            referer: None,
+            title: None,
+            daily_questions: crate::kernel::dashboard::ai::DAILY_REQUESTS,
+            daily_tokens: crate::kernel::dashboard::ai::DAILY_TOKENS,
+            run_max_tokens: crate::kernel::dashboard::ai::RUN_TOKENS,
+            max_answer_tokens: crate::kernel::dashboard::ai::MAX_ANSWER_TOKENS,
+            price_in: None,
+            price_out: None,
+            daily_usd: None,
+        }
+    }
+}
+
+/// A number from the environment within `lo..=hi`, or `default` when unset; `why` when invalid.
+fn ai_number<T: std::str::FromStr + PartialOrd + Copy>(
+    raw: Option<String>,
+    (lo, hi): (T, T),
+    default: T,
+    invalid: &mut Vec<&'static str>,
+    why: &'static str,
+) -> T {
+    match raw {
+        None => default,
+        Some(v) => match v.trim().replace('_', "").parse::<T>() {
+            Ok(n) if n >= lo && n <= hi => n,
+            _ => {
+                invalid.push(why);
+                default
+            }
+        },
+    }
 }
 
 impl DashboardAi {
-    fn from_env(get: &dyn Fn(&str) -> Option<String>, invalid: &mut Vec<&'static str>) -> Self {
+    /// Reads `DASHBOARD_AI_*` through `get` (the environment, or a test's map); each invalid
+    /// variable is pushed to `invalid` with what it expects.
+    pub fn from_env(
+        get: &dyn Fn(&str) -> Option<String>,
+        invalid: &mut Vec<&'static str>,
+    ) -> Self {
         let provider = match get("DASHBOARD_AI_PROVIDER").as_deref() {
             None => None,
             Some("anthropic") => Some(AiProvider::Anthropic),
@@ -266,6 +329,65 @@ impl DashboardAi {
         if title.as_deref().is_some_and(|t| !ai_title_ok(t)) {
             invalid.push("DASHBOARD_AI_TITLE (1 to 64 printable ASCII characters)");
         }
+        let d = Self::default();
+        let daily_questions = ai_number(
+            get("DASHBOARD_AI_DAILY_QUESTIONS"),
+            (1, 100_000),
+            d.daily_questions,
+            invalid,
+            "DASHBOARD_AI_DAILY_QUESTIONS (a whole number, 1 to 100000)",
+        );
+        let daily_tokens = ai_number(
+            get("DASHBOARD_AI_DAILY_TOKENS"),
+            (1_000, 10_000_000_000),
+            d.daily_tokens,
+            invalid,
+            "DASHBOARD_AI_DAILY_TOKENS (a whole number, 1000 to 10000000000)",
+        );
+        let run_max_tokens = ai_number(
+            get("DASHBOARD_AI_RUN_MAX_TOKENS"),
+            (1_000, 100_000_000),
+            d.run_max_tokens,
+            invalid,
+            "DASHBOARD_AI_RUN_MAX_TOKENS (a whole number, 1000 to 100000000)",
+        );
+        let max_answer_tokens = ai_number(
+            get("DASHBOARD_AI_MAX_ANSWER_TOKENS"),
+            (256, 128_000),
+            d.max_answer_tokens,
+            invalid,
+            "DASHBOARD_AI_MAX_ANSWER_TOKENS (a whole number, 256 to 128000)",
+        );
+        let price = |name: &str, why: &'static str, invalid: &mut Vec<&'static str>| {
+            get(name).map(|v| ai_number(Some(v), (0.0, 1_000.0), f64::NAN, invalid, why))
+                .filter(|p| !p.is_nan())
+        };
+        let price_in = price(
+            "DASHBOARD_AI_PRICE_IN",
+            "DASHBOARD_AI_PRICE_IN (USD per million input tokens, 0 to 1000)",
+            invalid,
+        );
+        let price_out = price(
+            "DASHBOARD_AI_PRICE_OUT",
+            "DASHBOARD_AI_PRICE_OUT (USD per million output tokens, 0 to 1000)",
+            invalid,
+        );
+        let daily_usd = get("DASHBOARD_AI_DAILY_USD")
+            .map(|v| {
+                ai_number(
+                    Some(v),
+                    (0.01, 100_000.0),
+                    f64::NAN,
+                    invalid,
+                    "DASHBOARD_AI_DAILY_USD (USD a day, 0.01 to 100000)",
+                )
+            })
+            .filter(|u| !u.is_nan());
+        if daily_usd.is_some() && (price_in.is_none() || price_out.is_none()) {
+            invalid.push(
+                "DASHBOARD_AI_DAILY_USD (needs DASHBOARD_AI_PRICE_IN and DASHBOARD_AI_PRICE_OUT to estimate the spend)",
+            );
+        }
         Self {
             provider,
             api_key,
@@ -276,6 +398,13 @@ impl DashboardAi {
             tools_core,
             referer,
             title,
+            daily_questions,
+            daily_tokens,
+            run_max_tokens,
+            max_answer_tokens,
+            price_in,
+            price_out,
+            daily_usd,
         }
     }
 }
@@ -335,6 +464,13 @@ impl fmt::Debug for DashboardAi {
             .field("tools_core", &self.tools_core)
             .field("referer", &self.referer)
             .field("title", &self.title)
+            .field("daily_questions", &self.daily_questions)
+            .field("daily_tokens", &self.daily_tokens)
+            .field("run_max_tokens", &self.run_max_tokens)
+            .field("max_answer_tokens", &self.max_answer_tokens)
+            .field("price_in", &self.price_in)
+            .field("price_out", &self.price_out)
+            .field("daily_usd", &self.daily_usd)
             .finish()
     }
 }
@@ -464,6 +600,7 @@ text = '''
 ("POST", "/dev/dashboard/ai/runs",                "ai_web::ai_runs",   Access::Dev),
 ("GET",  "/dev/dashboard/ai/runs/{id}",           "ai_web::run_page",  Access::Dev),
 ("GET",  "/dev/dashboard/ai/runs/{id}/stream",    "ai_web::run_stream", Access::Dev),
+("POST", "/dev/dashboard/ai/runs/{id}/continue", "ai_web::run_continue", Access::Dev),
 ("GET",  "/dev/dashboard/ai/history",             "ai_web::history_page", Access::Dev),
 ("GET",  "/dev/dashboard/explain",                "ai_web::explain_page", Access::Dev),
 ("GET",  "/dev/dashboard/tests",                  "web::tests_page",   Access::Dev),
@@ -501,6 +638,7 @@ text = '''
 ("POST", "/admin/dashboard/ai/runs",              "ai_web::ai_runs",   Access::Admin),
 ("GET",  "/admin/dashboard/ai/runs/{id}",         "ai_web::run_page",  Access::Admin),
 ("GET",  "/admin/dashboard/ai/runs/{id}/stream",  "ai_web::run_stream", Access::Admin),
+("POST", "/admin/dashboard/ai/runs/{id}/continue", "ai_web::run_continue", Access::Admin),
 ("GET",  "/admin/dashboard/ai/history",           "ai_web::history_page", Access::Admin),
 '''
 
@@ -643,10 +781,19 @@ DASHBOARD_IN_PRODUCTION=false
 # DASHBOARD_AI_IN_PRODUCTION=false         # also in the read-only /admin/dashboard, behind its gate
 # DASHBOARD_AI_PROACTIVE=false             # development: a watcher posts incident cards and investigates them
 # DASHBOARD_AI_TOOLS=all                   # or core: fewer tools, for small models
-# OpenRouter (OpenAI-compatible, tool calling): e.g. Meta's Muse models
+# Budgets (per process, reset at midnight UTC): questions and tokens a day, tokens per run.
+# DASHBOARD_AI_DAILY_QUESTIONS=200
+# DASHBOARD_AI_DAILY_TOKENS=10000000       # an agent run re-sends its context each step: ~40-50k tokens a run
+# DASHBOARD_AI_RUN_MAX_TOKENS=300000
+# DASHBOARD_AI_MAX_ANSWER_TOKENS=8000      # one answer's length; a cut answer gets a Continue button
+# A dollar cap instead (or as well): the model's USD per million tokens, from the provider's price list.
+# DASHBOARD_AI_PRICE_IN=0.04
+# DASHBOARD_AI_PRICE_OUT=0.55
+# DASHBOARD_AI_DAILY_USD=1.00              # stop for the day at this estimate (needs both prices)
+# OpenRouter (OpenAI-compatible, tool calling), e.g. a cheap fast model
 # DASHBOARD_AI_PROVIDER=openai-compatible
 # DASHBOARD_AI_BASE_URL=https://openrouter.ai/api/v1
-# DASHBOARD_AI_MODEL=meta/muse-spark-1.3   # or meta/muse-wonder (deeper), meta/muse-glimmer-30b (open weights)
+# DASHBOARD_AI_MODEL=deepseek/deepseek-v4.1-flash   # or openai/gpt-6-luna, z-ai/glm-5.3-flash
 # DASHBOARD_AI_REFERER=http://localhost:3000   # optional: OpenRouter's HTTP-Referer
 # DASHBOARD_AI_TITLE="My app dev dashboard"    # optional: OpenRouter's X-Title (quote values with spaces)
 '''

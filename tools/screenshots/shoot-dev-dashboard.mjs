@@ -73,7 +73,15 @@ const ensureTraffic = async () => {
 };
 
 const screens = [
+  // The overview opens with the AI command center (expanded): without a key here, with the mock
+  // in "overview-ai" (the AI server's proactive mode writes the briefing on its first visit).
   ["overview", async () => "/dev/dashboard"],
+  ["overview-ai", async () => "/dev/dashboard", async (page) => {
+    await page.locator("#health .ai-run, #health [data-ai-send]").first().waitFor();
+    if (!(await page.locator("#health .ai-run").count())) await startRun(page, "#health");
+    await page.locator("#health .ai-end .ai-text").waitFor({ timeout: 90_000 });
+    await page.goto(page.url(), { waitUntil: "load" });
+  }, { base: AI_BASE }],
   ["charts", async () => "/dev/dashboard/charts?range=1h"],
   ["charts-readout", async () => "/dev/dashboard/charts?range=1h", async (page) => {
     const box = await page.locator("#chart-latency .plot").boundingBox();
@@ -100,9 +108,9 @@ const screens = [
   }],
   ["table", async () => "/dev/dashboard/schema/tables/lab_order_items"],
   ["migrations", async () => "/dev/dashboard/schema/migrations"],
+  // A tab's Ask AI panel opens by itself on the first visit of the session.
   ["ai-setup", async () => "/dev/dashboard/sql", async (page) => {
-    await page.locator("[data-ai-panel] > summary").click();
-    await page.locator(".ai-setup").waitFor();
+    await page.locator("[data-ai-panel] .ai-setup").waitFor();
   }],
   // Ask AI as an agent, against tools/screenshots/ai-mock.mjs (a scripted, clearly fake
   // investigation): the health summary, a run mid-stream and finished (citations, an inline
@@ -119,8 +127,8 @@ const screens = [
     await page.locator("#health").scrollIntoViewIfNeeded();
   }, { base: AI_BASE }],
   ["ai-run-live", async () => "/dev/dashboard/sql", async (page) => {
-    await page.locator("[data-ai-panel] > summary").click();
-    await page.locator("[data-ai-prompt]").first().click();
+    await page.locator("[data-ai-panel] [data-ai-form]").waitFor();
+    await page.locator("[data-ai-panel] [data-ai-prompt]").first().click();
     await startRun(page, "[data-ai-panel]");
     await page.locator(".ai-run .ai-step").nth(2).waitFor({ timeout: 60_000 });
     const href = await page.locator(".ai-run .ai-permalink").getAttribute("href");

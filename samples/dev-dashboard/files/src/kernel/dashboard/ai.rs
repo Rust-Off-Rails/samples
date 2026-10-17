@@ -67,8 +67,10 @@ use crate::config::{AiProvider, Config, DashboardAi};
 pub const MAX_CONTEXT_CHARS: usize = 24_000;
 /// APP: the question's size cap, in characters.
 pub const MAX_QUESTION_CHARS: usize = 2_000;
-/// APP: each answer's length cap, in tokens (`max_tokens`): explanations, not essays.
-pub const MAX_ANSWER_TOKENS: u32 = 2_000;
+/// APP: each answer's length cap, in tokens (`max_tokens`): the default of
+/// `DASHBOARD_AI_MAX_ANSWER_TOKENS`. A health summary with its evidence runs past 2,000; an answer
+/// cut anyway gets a Continue button.
+pub const MAX_ANSWER_TOKENS: u32 = 8_000;
 /// Each answer's size cap on the wire, in bytes; more is refused, not truncated.
 pub const MAX_RESPONSE_BYTES: usize = 256 * 1024;
 /// APP: how long one provider call may take (a long answer from a large model takes a while).
@@ -76,15 +78,22 @@ pub const TIMEOUT: Duration = Duration::from_secs(90);
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// APP: questions (runs) a minute, per process.
 pub const PER_MINUTE: usize = 6;
-/// APP: questions, provider calls and tokens (in + out) a day, per process. The page shows what's
-/// left.
+/// APP: questions, provider calls and tokens (in + out) a day, per process: the defaults of
+/// `DASHBOARD_AI_DAILY_QUESTIONS` and `DASHBOARD_AI_DAILY_TOKENS`. The page shows what's left.
 pub const DAILY_REQUESTS: u32 = 200;
-pub const DAILY_CALLS: u32 = 1_000;
-pub const DAILY_TOKENS: u64 = 400_000;
+pub const DAILY_CALLS: u32 = 2_000;
+// WHY 10 million: an agent run re-sends its growing context on every step, so one investigation
+// is 40–50k tokens; 400k ran out after about eight during a demo, at a cost of cents on a cheap
+// model. The runaway guards are the per-run caps and PER_MINUTE, not this; a dollar cap is
+// DASHBOARD_AI_DAILY_USD.
+pub const DAILY_TOKENS: u64 = 10_000_000;
 /// APP: one run's bounds: provider calls (the last one may not call tools), tokens (in + out,
-/// summed over its calls) and wall time. A run that hits one says so ("stopped: budget").
+/// summed over its calls; the default of `DASHBOARD_AI_RUN_MAX_TOKENS`) and wall time. A run
+/// that hits one says so ("stopped: budget").
 pub const MAX_STEPS: usize = 8;
-pub const RUN_TOKENS: u64 = 80_000;
+// WHY 300k: each step re-sends the conversation (older tool results cut, the prefix cached), so
+// an 8-step run with long answers needs room; the day's caps still bound the total.
+pub const RUN_TOKENS: u64 = 300_000;
 pub const RUN_TIMEOUT: Duration = Duration::from_secs(180);
 /// How long a prepared context waits for its question.
 pub const PREPARED_TTL: Duration = Duration::from_secs(15 * 60);
@@ -306,6 +315,42 @@ impl Tab {
         }
     }
 
+    /// APP: "what this tab tells you", one line, at the top of its Ask AI panel.
+    pub fn guide_line(self) -> &'static str {
+        match self {
+            Tab::Overview => {
+                "The app's health at a glance: the cards, the briefing and what changed."
+            }
+            Tab::Insights => {
+                "Findings ranked by impact, each with its evidence, a fix and the guide that explains it."
+            }
+            Tab::Requests => {
+                "Every route with its hits, status classes and latency percentiles: where time and errors go."
+            }
+            Tab::Traces => {
+                "Single requests as waterfalls: which span, query or render took the time."
+            }
+            Tab::Sql => "Every statement by shape: the slow ones, the N+1s, and their query plans.",
+            Tab::Logs => {
+                "Requests and log lines as they happen, filtered by level, target or text."
+            }
+            Tab::Schema => "The live database: tables, keys, indexes and how they relate.",
+            Tab::Migrations => {
+                "Every migration, applied or pending, what it did, and drift from the database."
+            }
+            Tab::Routes => {
+                "The route table with live numbers and problems: missing gates, CSRF, never-hit routes."
+            }
+            Tab::Tests => {
+                "Your test runs on SQLite and Postgres: failures, flaky and slow tests, coverage."
+            }
+            Tab::Dev => "The development tools and what this app is made of.",
+            Tab::Mailbox => "The mail the app sent in development, as shapes and checks.",
+            Tab::Jobs => "The job queue: what runs, what fails, and why.",
+            Tab::Sockets => "Realtime: connections, topics and message rates.",
+        }
+    }
+
     /// APP: the framework guides this tab's answers should point at (the app's vendored copy).
     pub fn guides(self) -> &'static [&'static str] {
         match self {
@@ -422,7 +467,7 @@ pub fn system_prompt(tab: Tab) -> String {
     )
 }
 
-/// APP: the question behind "Generate health summary".
+/// APP: the question behind the command center's AI briefing.
 pub const HEALTH_QUESTION: &str = "Write a health summary of this app right now. Start with a \
      one-line verdict: Healthy, Needs attention, or Unhealthy. Then a short 'Healthy' list, a \
      'Needs attention' list ranked by impact, and 'Fix first': the one thing to do next and why. \
@@ -561,7 +606,7 @@ pub fn request(
         Some(AiProvider::Anthropic) => {
             let mut b = json!({
                 "model": ai.model,
-                "max_tokens": MAX_ANSWER_TOKENS,
+                "max_tokens": ai.max_answer_tokens,
                 "system": system,
                 "messages": messages,
             });
@@ -581,7 +626,7 @@ pub fn request(
             all.extend(messages.iter().cloned());
             let mut b = json!({
                 "model": ai.model,
-                "max_tokens": MAX_ANSWER_TOKENS,
+                "max_tokens": ai.max_answer_tokens,
                 "messages": all,
             });
             if with_tools {
@@ -593,6 +638,61 @@ pub fn request(
             b
         }
     }
+}
+
+/// Marks a body's stable prefix for the provider's prompt cache: the system prompt (with the
+/// tools before it) always, and with `upto_last` the conversation so far, so the next step reads
+/// it back at the cached price instead of paying for it again. Anthropic: `cache_control` blocks.
+/// OpenRouter with an `anthropic/` model: the same marks in the message parts, which OpenRouter
+/// passes on. Others (OpenAI, DeepSeek, most gateways) cache a repeated prefix by themselves, so
+/// their body is left alone.
+// WHY: an agent run re-sends its whole conversation every step; the cache turns that from the
+// biggest cost of a run into a small one. The first call has nothing to read back, so it marks
+// only the system prompt (and the preview shows exactly that body).
+pub fn cached(ai: &DashboardAi, mut body: Value, upto_last: bool) -> Value {
+    let mark = json!({ "type": "ephemeral" });
+    let text_block =
+        |text: &Value| json!([{ "type": "text", "text": text, "cache_control": mark }]);
+    let mark_last = |m: &mut Value| match &m["content"] {
+        Value::String(_) => {
+            let t = m["content"].clone();
+            m["content"] = text_block(&t);
+        }
+        Value::Array(a) if !a.is_empty() => {
+            if let Some(b) = m["content"].as_array_mut().and_then(|a| a.last_mut()) {
+                b["cache_control"] = mark.clone();
+            }
+        }
+        _ => {}
+    };
+    match ai.provider {
+        Some(AiProvider::Anthropic) => {
+            if body["system"].is_string() {
+                let t = body["system"].clone();
+                body["system"] = text_block(&t);
+            }
+            if upto_last
+                && let Some(last) = body["messages"].as_array_mut().and_then(|m| m.last_mut())
+            {
+                mark_last(last);
+            }
+        }
+        Some(AiProvider::OpenAiCompatible)
+            if ai.base_url.contains("openrouter.ai") && ai.model.starts_with("anthropic/") =>
+        {
+            if let Some(msgs) = body["messages"].as_array_mut() {
+                let n = msgs.len();
+                for (i, m) in msgs.iter_mut().enumerate() {
+                    // A tool message's content stays a string (not every route takes parts there).
+                    if (i == 0 || (upto_last && i + 1 == n && n > 1)) && m["role"] != "tool" {
+                        mark_last(m);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    body
 }
 
 /// A one-message body without tools (`request` with one user turn).
@@ -822,7 +922,8 @@ pub fn parse_answer(ai: &DashboardAi, v: &Value) -> Result<Answer, AiError> {
             let note = match v["stop_reason"].as_str() {
                 Some("refusal") => Some("The model declined to answer this one.".to_owned()),
                 Some("max_tokens") => Some(format!(
-                    "The answer was cut at {MAX_ANSWER_TOKENS} tokens (MAX_ANSWER_TOKENS)."
+                    "The answer was cut at {} tokens (DASHBOARD_AI_MAX_ANSWER_TOKENS).",
+                    ai.max_answer_tokens
                 )),
                 _ => None,
             };
@@ -843,7 +944,10 @@ pub fn parse_answer(ai: &DashboardAi, v: &Value) -> Result<Answer, AiError> {
                 .unwrap_or_default()
                 .to_owned();
             let note = (choice["finish_reason"] == "length").then(|| {
-                format!("The answer was cut at {MAX_ANSWER_TOKENS} tokens (MAX_ANSWER_TOKENS).")
+                format!(
+                    "The answer was cut at {} tokens (DASHBOARD_AI_MAX_ANSWER_TOKENS).",
+                    ai.max_answer_tokens
+                )
             });
             if text.trim().is_empty() && note.is_none() {
                 return Err(AiError::BadAnswer);
@@ -860,6 +964,43 @@ pub fn parse_answer(ai: &DashboardAi, v: &Value) -> Result<Answer, AiError> {
 
 // ---- rate and budget ---------------------------------------------------------------------------
 
+/// The daily caps a budget enforces: the constants by default, the `DASHBOARD_AI_*` env values
+/// once `budget(cfg)` has applied them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Caps {
+    pub questions: u32,
+    pub calls: u32,
+    pub tokens: u64,
+    /// USD per million input and output tokens (`DASHBOARD_AI_PRICE_IN` / `_OUT`), for the estimate.
+    pub price: Option<(f64, f64)>,
+    /// `DASHBOARD_AI_DAILY_USD`.
+    pub usd: Option<f64>,
+}
+
+impl Default for Caps {
+    fn default() -> Self {
+        Caps {
+            questions: DAILY_REQUESTS,
+            calls: DAILY_CALLS,
+            tokens: DAILY_TOKENS,
+            price: None,
+            usd: None,
+        }
+    }
+}
+
+impl Caps {
+    pub fn from_config(ai: &DashboardAi) -> Self {
+        Caps {
+            questions: ai.daily_questions,
+            calls: DAILY_CALLS.max(ai.daily_questions.saturating_mul(MAX_STEPS as u32)),
+            tokens: ai.daily_tokens,
+            price: ai.price_in.zip(ai.price_out),
+            usd: ai.daily_usd,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Budget {
     day: i64,
@@ -868,24 +1009,81 @@ pub struct Budget {
     /// Provider calls today (a run makes up to `MAX_STEPS`).
     pub calls: u32,
     pub tokens: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub caps: Caps,
     recent: VecDeque<Instant>,
 }
 
 pub static BUDGET: LazyLock<Mutex<Budget>> = LazyLock::new(|| Mutex::new(Budget::default()));
 
+/// The process's budget with this config's caps applied (they come from the environment, so
+/// every caller passes the same ones).
+pub fn budget(ai: &DashboardAi) -> std::sync::MutexGuard<'static, Budget> {
+    let mut b = lock(&BUDGET);
+    b.caps = Caps::from_config(ai);
+    b
+}
+
+/// "$0.0123", "$1.20".
+pub fn usd(v: f64) -> String {
+    if v < 0.1 {
+        format!("${v:.4}")
+    } else {
+        format!("${v:.2}")
+    }
+}
+
 impl Budget {
+    /// A budget with these caps (the process's own is `BUDGET`, through `budget`).
+    pub fn with_caps(caps: Caps) -> Self {
+        Budget {
+            caps,
+            ..Budget::default()
+        }
+    }
+
     fn roll(&mut self, today: i64) {
         if self.day != today {
             self.day = today;
             self.requests = 0;
             self.calls = 0;
             self.tokens = 0;
+            self.input_tokens = 0;
+            self.output_tokens = 0;
         }
+    }
+
+    /// Today's estimated spend in USD, when the prices are known.
+    pub fn spent_usd(&self) -> Option<f64> {
+        self.caps.price.map(|(pin, pout)| {
+            (self.input_tokens as f64 * pin + self.output_tokens as f64 * pout) / 1_000_000.0
+        })
+    }
+
+    /// Why today's money or tokens are used up, naming the limit and how to raise it.
+    fn spent_out(&self) -> Option<AiError> {
+        if self.tokens >= self.caps.tokens {
+            return Some(AiError::Budget(format!(
+                "Today's budget of {} tokens is used up (DAILY_TOKENS). Raise DASHBOARD_AI_DAILY_TOKENS in .env and restart, or wait for midnight UTC.",
+                crate::kernel::ui::thousands(self.caps.tokens)
+            )));
+        }
+        if let (Some(cap), Some(spent)) = (self.caps.usd, self.spent_usd())
+            && spent >= cap
+        {
+            return Some(AiError::Budget(format!(
+                "Today's budget of {} is used up (about {} spent, DASHBOARD_AI_DAILY_USD). Raise DASHBOARD_AI_DAILY_USD in .env and restart, or wait for midnight UTC.",
+                usd(cap),
+                usd(spent)
+            )));
+        }
+        None
     }
 
     /// Counts one question (a run), or says why not. `today` is the UTC day number.
     // SECURITY: a runaway script or a stuck button can't spend without bound: PER_MINUTE a minute
-    // and DAILY_REQUESTS / DAILY_TOKENS a day per process (test: ai_requests_are_rate_limited_and_budgeted)
+    // and the daily questions / tokens / dollars per process (test: ai_requests_are_rate_limited_and_budgeted)
     pub fn reserve(&mut self, today: i64, now: Instant) -> Result<(), AiError> {
         self.roll(today);
         while self
@@ -898,15 +1096,14 @@ impl Budget {
         if self.recent.len() >= PER_MINUTE {
             return Err(AiError::RateLimited);
         }
-        if self.requests >= DAILY_REQUESTS {
+        if self.requests >= self.caps.questions {
             return Err(AiError::Budget(format!(
-                "Today's budget of {DAILY_REQUESTS} questions is used up (DAILY_REQUESTS)."
+                "Today's budget of {} questions is used up (DAILY_REQUESTS). Raise DASHBOARD_AI_DAILY_QUESTIONS in .env and restart, or wait for midnight UTC.",
+                self.caps.questions
             )));
         }
-        if self.tokens >= DAILY_TOKENS {
-            return Err(AiError::Budget(format!(
-                "Today's budget of {DAILY_TOKENS} tokens is used up (DAILY_TOKENS)."
-            )));
+        if let Some(e) = self.spent_out() {
+            return Err(e);
         }
         self.recent.push_back(now);
         self.requests += 1;
@@ -914,37 +1111,51 @@ impl Budget {
     }
 
     /// Counts one provider call of a run that was reserved, or says why not.
-    // SECURITY: a run's calls count against DAILY_CALLS and DAILY_TOKENS too, so a model that
-    // keeps calling tools can't outspend the day (test: an_agent_run_stops_at_its_budget_and_says_so)
+    // SECURITY: a run's calls count against the daily calls, tokens and dollars too, so a model
+    // that keeps calling tools can't outspend the day (test: an_agent_run_stops_at_its_budget_and_says_so)
     pub fn reserve_call(&mut self, today: i64) -> Result<(), AiError> {
         self.roll(today);
-        if self.calls >= DAILY_CALLS {
+        if self.calls >= self.caps.calls {
             return Err(AiError::Budget(format!(
-                "Today's budget of {DAILY_CALLS} provider calls is used up (DAILY_CALLS)."
+                "Today's budget of {} provider calls is used up (DAILY_CALLS, at least DASHBOARD_AI_DAILY_QUESTIONS × MAX_STEPS). Raise DASHBOARD_AI_DAILY_QUESTIONS in .env and restart, or wait for midnight UTC.",
+                self.caps.calls
             )));
         }
-        if self.tokens >= DAILY_TOKENS {
-            return Err(AiError::Budget(format!(
-                "Today's budget of {DAILY_TOKENS} tokens is used up (DAILY_TOKENS)."
-            )));
+        if let Some(e) = self.spent_out() {
+            return Err(e);
         }
         self.calls += 1;
         Ok(())
     }
 
+    /// Counts tokens whose split isn't known (as input).
     pub fn spend(&mut self, today: i64, tokens: u64) {
-        self.roll(today);
-        self.tokens = self.tokens.saturating_add(tokens);
+        self.spend_io(today, tokens, 0);
     }
 
-    /// "193 questions and 391,200 tokens left today".
+    /// Counts one call's input and output tokens.
+    pub fn spend_io(&mut self, today: i64, input: u64, output: u64) {
+        self.roll(today);
+        self.tokens = self.tokens.saturating_add(input).saturating_add(output);
+        self.input_tokens = self.input_tokens.saturating_add(input);
+        self.output_tokens = self.output_tokens.saturating_add(output);
+    }
+
+    /// "193 questions and 9,391,200 tokens left today · about $0.0123 spent today (cap $1.00)".
     pub fn left(&mut self, today: i64) -> String {
         self.roll(today);
-        format!(
+        let mut s = format!(
             "{} questions and {} tokens left today",
-            DAILY_REQUESTS.saturating_sub(self.requests),
-            crate::kernel::ui::thousands(DAILY_TOKENS.saturating_sub(self.tokens))
-        )
+            self.caps.questions.saturating_sub(self.requests),
+            crate::kernel::ui::thousands(self.caps.tokens.saturating_sub(self.tokens))
+        );
+        if let Some(spent) = self.spent_usd() {
+            s.push_str(&format!(" · about {} spent today", usd(spent)));
+            if let Some(cap) = self.caps.usd {
+                s.push_str(&format!(" (cap {})", usd(cap)));
+            }
+        }
+        s
     }
 }
 

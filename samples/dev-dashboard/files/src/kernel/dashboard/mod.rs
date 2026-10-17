@@ -28,6 +28,7 @@ pub mod ai;
 pub mod ai_agent;
 pub mod ai_context;
 pub mod ai_explain;
+pub mod ai_home;
 pub mod ai_tools;
 pub mod ai_watch;
 pub mod ai_web;
