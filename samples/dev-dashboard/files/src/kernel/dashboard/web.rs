@@ -2101,18 +2101,18 @@ pub async fn route_findings(state: &AppState) -> Vec<insights::Finding> {
         href: href.to_owned(),
     };
     for r in &p.without_csrf {
-        out.push(f(format!("csrf-{r}"), "csrf", Severity::High, format!("{r} accepts cross-site requests"), "A cross-site request in an unused method reached the router instead of a 403 from the CSRF layer.".into(), "Mount the router inside the app's CsrfLayer (routes.rs); never exempt a route.", ".offrails/guides/security.md#csrf", "https://rustoffrails.org/docs/security#csrf", "/dev/dashboard/routes#problems"));
+        out.push(f(format!("csrf-{r}"), "csrf", Severity::High, format!("{r} accepts cross-site requests"), "A cross-site request in an unused method reached the router instead of a 403 from the CSRF layer.".into(), "Mount the router inside the app's CsrfLayer (routes.rs); never exempt a route.", ".offrails/guides/security.md#csrf", "https://rustoffrails.org/docs/guides/security#csrf", "/dev/dashboard/routes#problems"));
     }
     for r in p.ungated.iter().chain(&p.open_in_production) {
-        out.push(f(format!("gate-{r}"), "gate", Severity::High, format!("{r} has no gate"), "An /admin or /dev path that anyone may call, or an admin/login GET that answers 2xx anonymously with the production config.".into(), "Give it Access::Admin and the admin extractor (or Access::Dev and mount it only in development).", ".offrails/guides/security.md#admin--dev-surfaces", "https://rustoffrails.org/docs/security#admin--dev-surfaces", "/dev/dashboard/routes#problems"));
+        out.push(f(format!("gate-{r}"), "gate", Severity::High, format!("{r} has no gate"), "An /admin or /dev path that anyone may call, or an admin/login GET that answers 2xx anonymously with the production config.".into(), "Give it Access::Admin and the admin extractor (or Access::Dev and mount it only in development).", ".offrails/guides/security.md#admin--dev-surfaces", "https://rustoffrails.org/docs/guides/security#admin--dev-surfaces", "/dev/dashboard/routes#problems"));
     }
     for w in lock(&HUB.http).get_writes() {
-        out.push(f(format!("getwrite-{}-{}", w.route, w.sql), "get_write", Severity::Medium, format!("GET {} writes to the database", w.route), format!("{}× during a GET: {}", w.count, ui::truncate(&w.sql, 120)), "Safe methods never change state: move the write behind a POST (CSRF applies), or allow it in GET_WRITES_ALLOWED if it is a cache fill.", ".offrails/guides/security.md#csrf", "https://rustoffrails.org/docs/security#csrf", &format!("/dev/dashboard/traces/{}", w.trace)));
+        out.push(f(format!("getwrite-{}-{}", w.route, w.sql), "get_write", Severity::Medium, format!("GET {} writes to the database", w.route), format!("{}× during a GET: {}", w.count, ui::truncate(&w.sql, 120)), "Safe methods never change state: move the write behind a POST (CSRF applies), or allow it in GET_WRITES_ALLOWED if it is a cache fill.", ".offrails/guides/security.md#csrf", "https://rustoffrails.org/docs/guides/security#csrf", &format!("/dev/dashboard/traces/{}", w.trace)));
     }
     let routes = rx::table();
     for n in lock(&HUB.http).not_found_list().into_iter().take(10) {
         let near = rx::nearest(&n.path, &routes);
-        out.push(f(format!("404-{}", n.path), "not_found", if n.referrer.as_deref().is_some_and(|r| r.starts_with('/')) { Severity::Medium } else { Severity::Low }, format!("404: {}", n.path), format!("{}× {}{}", n.count, n.referrer.as_ref().map(|r| format!("from {r}")).unwrap_or_else(|| "with no referrer".into()), near.map(|r| format!("; did you mean {r}?")).unwrap_or_default()), "A link on this app points nowhere: fix the link (build it with a paths:: helper) or route the path.", ".offrails/guides/routing.md", "https://rustoffrails.org/docs/routing", "/dev/dashboard/routes#not-found"));
+        out.push(f(format!("404-{}", n.path), "not_found", if n.referrer.as_deref().is_some_and(|r| r.starts_with('/')) { Severity::Medium } else { Severity::Low }, format!("404: {}", n.path), format!("{}× {}{}", n.count, n.referrer.as_ref().map(|r| format!("from {r}")).unwrap_or_else(|| "with no referrer".into()), near.map(|r| format!("; did you mean {r}?")).unwrap_or_default()), "A link on this app points nowhere: fix the link (build it with a paths:: helper) or route the path.", ".offrails/guides/routing.md", "https://rustoffrails.org/docs/guides/routing", "/dev/dashboard/routes#not-found"));
     }
     for r in &p.missing_docs {
         out.push(f(
@@ -2123,7 +2123,7 @@ pub async fn route_findings(state: &AppState) -> Vec<insights::Finding> {
             "docs/routes.md is older than the route table.".into(),
             "Run `app routes` (it rewrites docs/routes.md).",
             ".offrails/guides/routing.md",
-            "https://rustoffrails.org/docs/routing",
+            "https://rustoffrails.org/docs/guides/routing",
             "/dev/dashboard/routes#problems",
         ));
     }
@@ -2136,7 +2136,7 @@ pub async fn route_findings(state: &AppState) -> Vec<insights::Finding> {
             format!("For example {}", p.untested.iter().take(4).cloned().collect::<Vec<_>>().join(", ")),
             "Every route gets an integration test that requests it (the route sweeps only check access).",
             ".offrails/guides/testing.md#writing-tests",
-            "https://rustoffrails.org/docs/testing#writing-tests",
+            "https://rustoffrails.org/docs/guides/testing#writing-tests",
             "/dev/dashboard/routes?problems=1",
         ));
     }
@@ -2164,7 +2164,7 @@ pub async fn route_findings(state: &AppState) -> Vec<insights::Finding> {
             ),
             "Click through them (or add them to a load-lab run) before calling a change done.",
             ".offrails/guides/dev-tools.md#for-agents",
-            "https://rustoffrails.org/docs/dev-tools#for-agents",
+            "https://rustoffrails.org/docs/guides/dev-tools#for-agents",
             "/dev/dashboard/routes",
         ));
     }
@@ -2181,7 +2181,7 @@ pub async fn route_findings(state: &AppState) -> Vec<insights::Finding> {
                     format!("{} server errors in {} requests", s.s5, s.count),
                     "Filter the live log by level=error; every 500 is logged with its request id.",
                     ".offrails/guides/errors-and-logging.md#response-mapping",
-                    "https://rustoffrails.org/docs/errors-and-logging#response-mapping",
+                    "https://rustoffrails.org/docs/guides/errors-and-logging#response-mapping",
                     "/dev/dashboard/logs?level=error",
                 ));
             }

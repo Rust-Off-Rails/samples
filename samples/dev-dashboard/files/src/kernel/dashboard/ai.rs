@@ -1393,9 +1393,9 @@ fn code_or_guide(s: &str) -> Inline {
         if GUIDES.contains(&file) && anchor_ok {
             let page = file.trim_end_matches(".md");
             let href = if anchor.is_empty() {
-                format!("https://rustoffrails.org/docs/{page}")
+                format!("https://rustoffrails.org/docs/guides/{page}")
             } else {
-                format!("https://rustoffrails.org/docs/{page}#{anchor}")
+                format!("https://rustoffrails.org/docs/guides/{page}#{anchor}")
             };
             return Inline::Guide(path.to_owned(), href);
         }
@@ -1418,7 +1418,7 @@ mod tests {
         assert!(p.contains(&Inline::Code("orders".into())));
         assert!(p.contains(&Inline::Guide(
             ".offrails/guides/models.md#eager-loading".into(),
-            "https://rustoffrails.org/docs/models#eager-loading".into()
+            "https://rustoffrails.org/docs/guides/models#eager-loading".into()
         )));
         assert!(matches!(&blocks[2], Block::List(false, items) if items.len() == 2));
         assert!(matches!(&blocks[3], Block::List(true, items) if items.len() == 2));

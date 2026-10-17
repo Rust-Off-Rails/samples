@@ -250,7 +250,7 @@ pub async fn findings(state: &AppState) -> Vec<Finding> {
             evidence: pending.join(", "),
             fix: "Run `app db migrate` (bin/dev does it on every rebuild).".into(),
             guide: ".offrails/guides/dev-tools.md#pending-migrations",
-            guide_url: "https://rustoffrails.org/docs/dev-tools#pending-migrations",
+            guide_url: "https://rustoffrails.org/docs/guides/dev-tools#pending-migrations",
             href: "/dev/dashboard/schema/migrations".into(),
         });
     }
@@ -288,7 +288,7 @@ fn n_plus_one(out: &mut Vec<Finding>) {
             evidence: format!("{} runs {}× in one request ({} requests so far): {}", n.route, n.count, n.times, crate::kernel::ui::truncate(&n.sql, 140)),
             fix: "Load the children in one query (`load_many`, or `filter(Column::ParentId.is_in(ids))`), then add an `assert_query_count_stable` test for the page.".into(),
             guide: ".offrails/guides/models.md#associations",
-            guide_url: "https://rustoffrails.org/docs/models#associations",
+            guide_url: "https://rustoffrails.org/docs/guides/models#associations",
             href: format!("/dev/dashboard/traces/{}", n.trace),
         });
     }
@@ -306,7 +306,7 @@ fn slow_routes_and_queries(out: &mut Vec<Finding>) {
                 evidence: format!("p95 {}, p99 {}, max {} over {} requests", micros(r.p95), micros(r.p99), micros(r.max), r.count),
                 fix: "Open its slowest trace: the waterfall shows whether the time goes to SQL, a call out or rendering.".into(),
                 guide: ".offrails/guides/test-standards.md#6-performance-guards",
-                guide_url: "https://rustoffrails.org/docs/test-standards#6-performance-guards",
+                guide_url: "https://rustoffrails.org/docs/guides/test-standards#6-performance-guards",
                 href: r.slowest.first().map_or_else(|| "/dev/dashboard/requests".into(), |(id, _, _)| format!("/dev/dashboard/traces/{id}")),
             });
         }
@@ -322,7 +322,7 @@ fn slow_routes_and_queries(out: &mut Vec<Finding>) {
                 evidence: format!("p95 {}, {} runs, {} in total: {}", micros(q.p95), q.count, micros(q.total), crate::kernel::ui::truncate(&q.sql, 140)),
                 fix: "EXPLAIN it from its SQL page; add the index the plan asks for, or fetch less (a LIMIT, fewer columns, a cached count).".into(),
                 guide: ".offrails/guides/migrations.md#rules",
-                guide_url: "https://rustoffrails.org/docs/migrations#rules",
+                guide_url: "https://rustoffrails.org/docs/guides/migrations#rules",
                 href: format!("/dev/dashboard/sql/{}", q.id),
             });
         }
@@ -343,7 +343,7 @@ fn rising_errors(out: &mut Vec<Finding>) {
                 evidence: format!("{errors} server errors in the last 5 minutes: {:.0}% of requests, up from {:.0}%", recent * 100.0, before * 100.0),
                 fix: "Filter the live log by level=error for the cause; every 500 is logged once, with its request id.".into(),
                 guide: ".offrails/guides/errors-and-logging.md#response-mapping",
-                guide_url: "https://rustoffrails.org/docs/errors-and-logging#response-mapping",
+                guide_url: "https://rustoffrails.org/docs/guides/errors-and-logging#response-mapping",
                 href: "/dev/dashboard/logs?level=error".into(),
             });
         }
@@ -372,7 +372,7 @@ fn slow_renders(out: &mut Vec<Finding>) {
                 evidence: format!("a render span took {}", micros(worst)),
                 fix: "Compute in the handler, not the template; paginate long lists; render partials once.".into(),
                 guide: ".offrails/guides/views.md#layout--partials",
-                guide_url: "https://rustoffrails.org/docs/views#layout--partials",
+                guide_url: "https://rustoffrails.org/docs/guides/views#layout--partials",
                 href: format!("/dev/dashboard/traces/{trace}"),
             });
         }
@@ -414,7 +414,7 @@ fn memory_and_pool(out: &mut Vec<Finding>) {
                 evidence: format!("RSS grew {} over the last {} at a steady rate ({}/min)", super::web::bytes(growth as u64), crate::kernel::ui::duration((span * 1000.0) as i64), super::web::bytes((per_sec * 60.0) as u64)),
                 fix: "Look for a cache or a Vec that only grows (bound it, like the dashboard bounds itself), or a task per request that never ends.".into(),
                 guide: ".offrails/guides/caching.md#key-design",
-                guide_url: "https://rustoffrails.org/docs/caching#key-design",
+                guide_url: "https://rustoffrails.org/docs/guides/caching#key-design",
                 href: "/dev/dashboard/charts?range=1h#chart-memory".into(),
             });
         }
@@ -434,7 +434,7 @@ fn memory_and_pool(out: &mut Vec<Finding>) {
             evidence: format!("every connection was in use for {saturated} of the last {} seconds; requests waited for one (sqlx doesn't count waiters, so the dashboard counts the seconds with none idle)", recent.len()),
             fix: "Raise DATABASE_POOL, shorten transactions, and never hold a connection across an await on something slow.".into(),
             guide: ".offrails/guides/database.md#kerneldbrs-spec",
-            guide_url: "https://rustoffrails.org/docs/database",
+            guide_url: "https://rustoffrails.org/docs/guides/database",
             href: "/dev/dashboard/charts#chart-pool".into(),
         });
     }
@@ -471,7 +471,7 @@ fn csp(out: &mut Vec<Finding>) {
             fix: "Move inline script or style into a file under static/; never loosen the CSP."
                 .into(),
             guide: ".offrails/guides/security.md#the-header-matrix",
-            guide_url: "https://rustoffrails.org/docs/security#the-header-matrix",
+            guide_url: "https://rustoffrails.org/docs/guides/security#the-header-matrix",
             href: "/dev/dashboard/insights#csp".into(),
         });
     }
@@ -491,7 +491,7 @@ fn schema_rules(tables: &[schema::Table], out: &mut Vec<Finding>) {
                 evidence: format!("{}.{} references {}, and no index starts with it: every lookup by {} (and every delete of a {} row) scans {} rows", t.name, fk.columns.join(", "), fk.table, fk.table, fk.table, t.rows.unwrap_or(0)),
                 fix: format!("A migration with `Index::create().table({}).col({})`.", t.name, fk.columns.join(").col(")),
                 guide: ".offrails/guides/migrations.md#rules",
-                guide_url: "https://rustoffrails.org/docs/migrations#rules",
+                guide_url: "https://rustoffrails.org/docs/guides/migrations#rules",
                 href: format!("/dev/dashboard/schema#table-{}", t.name),
             });
         }
@@ -508,7 +508,7 @@ fn schema_rules(tables: &[schema::Table], out: &mut Vec<Finding>) {
                 evidence: format!("{} rows{}{}", crate::kernel::ui::thousands(rows as u64), t.bytes.map(|b| format!(", {}", super::web::bytes(b as u64))).unwrap_or_default(), if grew > 0 { format!(", +{} since {}", crate::kernel::ui::thousands(grew as u64), crate::kernel::ui::ago(seen_at, now)) } else { String::new() }),
                 fix: "Make sure every query on it uses an index and a LIMIT; prune old rows with a recurring job.".into(),
                 guide: ".offrails/guides/jobs.md#recurring-jobs-srcjobsrecurringrs-the-oban-cron-plugin",
-                guide_url: "https://rustoffrails.org/docs/jobs",
+                guide_url: "https://rustoffrails.org/docs/guides/jobs",
                 href: format!("/dev/dashboard/schema#table-{}", t.name),
             });
         }
@@ -568,7 +568,7 @@ async fn scans(state: &AppState, tables: &[schema::Table], out: &mut Vec<Finding
                 ),
                 fix: "Index the columns in its WHERE (and ORDER BY), in that order.".into(),
                 guide: ".offrails/guides/migrations.md#rules",
-                guide_url: "https://rustoffrails.org/docs/migrations#rules",
+                guide_url: "https://rustoffrails.org/docs/guides/migrations#rules",
                 href: format!("/dev/dashboard/sql/{}", q.id),
             });
         }
@@ -634,7 +634,7 @@ async fn jobs(state: &AppState, out: &mut Vec<Finding>) {
             evidence: format!("{n} jobs of {worker} are retrying or discarded"),
             fix: "Open its errors on the jobs dashboard; a job that fails on every attempt needs a fix, not more retries.".into(),
             guide: ".offrails/guides/jobs.md#observability",
-            guide_url: "https://rustoffrails.org/docs/jobs#observability",
+            guide_url: "https://rustoffrails.org/docs/guides/jobs#observability",
             href: format!("/admin/jobs/list?state=retryable&worker={worker}"),
         });
     }

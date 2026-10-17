@@ -1006,7 +1006,7 @@ async fn insights_rank_findings_and_can_be_dismissed() {
     page.assert_ok()
         .assert_text("N+1 on /dev/lab/orders/n-plus-one")
         .assert_contains(".offrails/guides/models.md#associations")
-        .assert_contains("https://rustoffrails.org/docs/models#associations");
+        .assert_contains("https://rustoffrails.org/docs/guides/models#associations");
     let id = page
         .body
         .split("name=\"id\" value=\"")
