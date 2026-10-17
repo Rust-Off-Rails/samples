@@ -2802,6 +2802,30 @@ struct AiPage {
     a: Option<AiAnswer>,
 }
 
+/// "Anthropic · claude-sonnet-5-5 · https://api.anthropic.com · key: set" for Config.
+// SECURITY: the key shows as "set" or "not set", never its value (test: the_ai_key_never_reaches_logs_traces_pages_or_recorded_requests)
+fn ai_setting(ai: &crate::config::DashboardAi) -> String {
+    if ai.provider.is_none() {
+        return "off (DASHBOARD_AI_PROVIDER not set)".into();
+    }
+    format!(
+        "{} · {} · {} · key: {}{}",
+        provider_label(ai),
+        ai.model,
+        ai.base_url,
+        if ai.api_key.is_some() {
+            "set"
+        } else {
+            "not set"
+        },
+        if ai.in_production {
+            " · also in production"
+        } else {
+            ""
+        }
+    )
+}
+
 /// A question placeholder in the preview; the script fills in what is typed.
 const QUESTION_SLOT: &str = "{your question}";
 
@@ -3150,6 +3174,10 @@ pub const ENV_VALUES_SHOWN: &[&str] = &[
     "DASHBOARD_IN_PRODUCTION",
     "DASHBOARD_DEMO_HISTORY",
     "DASHBOARD_GITHUB_FIXTURE",
+    "DASHBOARD_AI_PROVIDER",
+    "DASHBOARD_AI_MODEL",
+    "DASHBOARD_AI_BASE_URL",
+    "DASHBOARD_AI_IN_PRODUCTION",
 ];
 
 /// Whether Config may show this env var's value (`ENV_VALUES_SHOWN`).
@@ -3195,6 +3223,7 @@ async fn config_page(
             crate::controllers::dev::redact_db(&c.database_url),
         ),
         ("DATABASE_POOL".to_owned(), c.database_pool.to_string()),
+        ("Ask AI".to_owned(), ai_setting(&c.dashboard.ai)),
         ("APP_URL".to_owned(), c.app_url.clone()),
         ("PORT".to_owned(), c.port.to_string()),
         (

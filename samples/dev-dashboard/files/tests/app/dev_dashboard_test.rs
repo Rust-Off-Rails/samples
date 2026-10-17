@@ -1901,6 +1901,10 @@ async fn the_ai_key_never_reaches_logs_traces_pages_or_recorded_requests() {
         AI_KEY,
         "it was used"
     );
+    app.get("/dev/dashboard/config")
+        .await
+        .assert_text("Anthropic · claude-sonnet-5-5")
+        .assert_text("key: set");
     let mut bodies = vec![panel.body.clone(), answer.body.clone()];
     for path in [
         "/dev/dashboard/config",
