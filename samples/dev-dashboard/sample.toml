@@ -1,7 +1,7 @@
 # samples/dev-dashboard/sample.toml: the format is samples/FORMAT.md.
 name = "dev-dashboard"
 version = "0.7.0"
-summary = "/dev/dashboard, an in-process LiveDashboard: live charts (memory, CPU, req/s, p50/p95/p99, errors, DB pool, Tokio), requests per route, traces as waterfalls, SQL fingerprints with N+1 and EXPLAIN, a live log tail, insights, a routes explorer, a schema browser, test runs and CI, and a load lab. Development only; a read-only subset for admins in production."
+summary = "/dev/dashboard, an in-process LiveDashboard: live charts (memory, CPU, req/s, p50/p95/p99, errors, DB pool, Tokio), requests per route, traces as waterfalls, SQL fingerprints with N+1 and EXPLAIN, a live log tail, insights, a routes explorer, an interactive schema diagram (ERD) with a migrations timeline and drift checks, an optional bring-your-own-key AI assistant, test runs and CI, and a load lab. Development only; a read-only subset for admins in production."
 depends_on = []
 extracted_from = "Rust off Rails apps"
 
