@@ -62,6 +62,7 @@ tools/ci.sh           prove samples: fresh host copy, install, fmt, clippy, test
 tools/security-check.sh   every SECURITY marker and CHECKS.md row cites a test that exists
 tools/demo.sh         a running demo with every sample and seed data (demo/, git-ignored)
 tools/screenshots.sh  regenerate docs/screenshots/ from the demo with Playwright
+tools/e2e.sh          a real browser through boosted links: every interactive page (auth, live room) works after a click, not only on a fresh load
 tools/vendor-framework.sh   fetch the framework release (checksum-verified) into host/.offrails
 ```
 
@@ -71,12 +72,13 @@ Prove everything (needs a Postgres the suite may create databases in):
 tools/vendor-framework.sh host
 TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres tools/ci.sh   # each sample alone, then all together
 tools/security-check.sh
+tools/e2e.sh                                                                          # Node >= 22.12, pnpm, Google Chrome
 tools/demo.sh && open http://localhost:3900/dev/mailbox                              # tools/demo.sh stop
 ```
 
 `host/` in development listens on 127.0.0.1 only and answers only local `Host` names (DNS rebinding can't reach `/dev`); `APP_BIND=0.0.0.0` opens it to a container's network and `APP_ALLOWED_HOSTS` adds a tunnel or LAN name. An unset `APP_ENV` means development and says so loudly at boot.
 
-CI (`.github/workflows/ci.yml`) runs the same, plus gitleaks over the whole history and an OWASP ZAP baseline against the demo app running in production mode (fresh random secrets, no `/dev`) with every sample installed.
+CI (`.github/workflows/ci.yml`) runs the same (`tools/e2e.sh` included), plus gitleaks over the whole history and an OWASP ZAP baseline against the demo app running in production mode (fresh random secrets, no `/dev`) with every sample installed.
 
 ## Versions
 

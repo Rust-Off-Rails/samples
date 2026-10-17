@@ -102,8 +102,6 @@ pub async fn show(
         rooms,
         messages,
         since,
-        channels_js: s.assets.path("channels.js"),
-        live_room_js: s.assets.path("live_room.js"),
         template_message: MessageView::blank(),
         palette: (0..8).collect(),
         dev_guest: s.config.is_development() && identity::DEV_GUESTS,

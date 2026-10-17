@@ -116,7 +116,7 @@ The anchors `host/` provides (each file says what goes there):
 | `src/tasks/mod.rs` | `task mods`, `tasks` |
 | `src/main.rs` | `cli commands`, `cli dispatch`, `serve start`, `serve stop`, `tracing layers` (a `Box::new(…)` layer beside the log formatter) |
 | `migration/src/lib.rs` | `migration mods`, `migrations` |
-| `templates/layouts/application.html` | `dev footer links` |
+| `templates/layouts/application.html` | `app head` (a `<script>` or `<link>` app pages need, loaded on every page: see [Scripts on app pages](#scripts-on-app-pages)), `dev footer links` |
 | `templates/kernel/layout.html` | `kernel head` (a `<link>` or `<script>` every kernel page loads, usually inside an `{% if %}`), `kernel main` (markup at the top of every kernel page's `<main>`, e.g. the dev dashboard's Ask AI bar); `chrome` is in scope, `chrome.theme.return_to` is the page's path and query |
 | `templates/shared/_nav.html` | `nav links` |
 | `tests/app/main.rs` | `test mods` |
@@ -178,6 +178,18 @@ Kernel pages (and the app layout and error pages) have one theme: System, Light 
   }
   ```
   `data-theme=dark` forces dark, `light` forces light, `system` follows the OS. A sample's app pages just use `dark:` classes; `tailwind_dark_utilities_follow_the_theme_switch` checks the built CSS carries both selectors.
+
+## Scripts on app pages
+
+The app layout boosts every link and form (`<body hx-boost="true">`): a click fetches the next page and swaps `<body>`, and nothing in the new page's `<head>` runs. A script a page adds in `{% block head %}` works on a direct load and is dead after a boosted click, so a sample never does that:
+
+- **Load it once, from the layout:** wire the `<script src="…" defer>` at `samples: app head`, with a digested URL from a ctx field (`ctx fields`: `pub auth_js: String`; `ctx init`: `auth_js: state.assets.path("auth.js"),`). It then loads on every app page, so keep it small and inert where its markup is absent.
+- **Delegate, don't bind:** one `document` listener per behavior, keyed by a data attribute (`e.target.closest("[data-reveal]")`), works for the first page, every boosted page and every htmx swap with no re-binding.
+- **Set up elements on `htmx:load`** (it fires for the first page and for each swapped fragment, with the new element as `e.detail.elt`) when something must be initialized, and mark what's done (`data-started`) so nothing binds twice. Tear down on `htmx:beforeSwap` what outlives the page (a socket topic, a timer).
+- **Guard the file** (`if (window.offrailsAuth) return;` in an IIFE): it may still be loaded twice in an app that has an older page.
+- **Prove it in a browser:** `tools/e2e.sh` arrives at each interactive page through a boosted link and checks the behavior (a direct `page.goto` would hide this bug).
+
+Kernel pages render in `templates/kernel/layout.html`, which doesn't boost: their scripts load per page (`Chrome::script`), and links into them from app pages carry `hx-boost="false"` (a boosted swap would keep the app layout's `<head>`).
 
 ## README.md
 

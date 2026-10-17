@@ -53,6 +53,24 @@ jobs:
       - name: Every sample alone, then all together (SQLite and Postgres; clippy, cargo deny, cargo audit)
         run: tools/ci.sh
 
+  e2e:                          # a real browser through boosted links: every interactive page works
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: "host -> ../.cache/target" }
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: pnpm (the version tools/screenshots/package.json pins)
+        run: corepack enable
+      - run: tools/vendor-framework.sh host
+      - name: Every sample in the demo; auth pages and the live room reached through boosted links (Google Chrome)
+        run: tools/e2e.sh
+      - if: failure()
+        run: tail -80 demo/demo.log || true
+
   zap:                          # OWASP ZAP baseline against every sample installed, in production mode
     runs-on: ubuntu-latest
     steps:

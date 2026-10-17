@@ -48,7 +48,8 @@ By hand, in the app root, after [dev-mailbox](../dev-mailbox/):
    - `src/kernel/mod.rs`: `auth_token`, `background`, `return_to`, `session`, `user_agent` modules.
    - `src/models/mod.rs`: `auth_event`, `auth_throttle`, `session`, `user`, `user_token`, and `pub type User = user::Model;`.
    - `src/controllers/mod.rs`: `account`, `auth`, `security`, `sessions`.
-   - `src/views/mod.rs`: `pub mod auth;` and two `Ctx` fields, `current_user` and `dev_mailbox`; `src/controllers/application.rs` fills them in `Ctx`'s extractor.
+   - `src/views/mod.rs`: `pub mod auth;` and three `Ctx` fields, `current_user`, `dev_mailbox` and `auth_js` (the digested URL of `static/auth.js`); `src/controllers/application.rs` fills them in `Ctx`'s extractor.
+   - `templates/layouts/application.html`: `<script src="{{ ctx.auth_js }}" defer></script>` at `samples: app head`, so every app page loads it. Never in a page's `{% block head %}`: links and forms are boosted, and a boosted click runs nothing in the next page's `<head>` (the Show button, Caps Lock hint and code auto-submit would be dead until a reload).
    - `src/mailers/mod.rs`: `pub mod auth_mailer;`; `src/mailers/previews.rs`: two previews.
    - `src/state.rs`: a `background: Background` field, built with `Background::default()`.
    - `src/config.rs`: an `auth: AuthConfig` field (`APP_SECRET_KEY`) with its section, parse, test and `Debug` lines.
@@ -84,6 +85,7 @@ By hand, in the app root, after [dev-mailbox](../dev-mailbox/):
 
 ## Do not change
 
+- `static/auth.js` loads from the app layout on every page, once, and only listens on `document`, so it works after boosted links and htmx swaps (`auth_js_loads_from_the_layout_on_every_page`, `app_pages_load_no_scripts_or_stylesheets_in_their_head_block`, and in a browser `tools/e2e.sh`).
 - Tokens are stored as digests only and compared by digest or in constant time (`only_token_digests_are_stored`, `constant_time_eq_compares_content`).
 - Every sign-in goes through `auth::sign_in` → `finish_sign_in`, which rotates the session (`sign_in_rotates_the_session_and_kills_the_old_token`, `a_session_planted_before_sign_in_is_worthless_after_it`).
 - Production reads only `__Host-` cookies (`production_ignores_a_planted_unprefixed_session_cookie`, `production_auth_cookies_are_host_prefixed_and_secure`).
@@ -143,7 +145,7 @@ Emails go out through `state.background` (no job queue needed): the request retu
 | `src/mailers/auth_mailer.rs` | one template pair for every auth email; security notices |
 | `src/tasks/auth_cleanup.rs`, `src/tasks/auth_demo.rs` | cleanup; development demo accounts |
 | `templates/…` | sign-in, account, confirm, email change, not-me, check-email, invalid-link, nav, dev hint, mail |
-| `static/auth.js` | show/hide password, Caps Lock hint, one-time-code auto-submit, copy, print |
+| `static/auth.js` | show/hide password, Caps Lock hint, one-time-code auto-submit, copy, print: delegated `document` listeners, loaded once by the layout |
 | `migration/src/m20261016_0010…_0013…` | users, sessions, user_tokens, auth_events + auth_throttles |
 | `tests/app/auth_core_test.rs` | the tests named in CHECKS.md, plus `LogCapture` |
 | `screenshots.mjs` (not installed) | the screenshots for all four auth samples |
