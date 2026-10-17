@@ -53,7 +53,7 @@ jobs:
       - name: Every sample alone, then all together (SQLite and Postgres; clippy, cargo deny, cargo audit)
         run: tools/ci.sh
 
-  zap:                          # OWASP ZAP baseline against the demo with every sample installed
+  zap:                          # OWASP ZAP baseline against every sample installed, in production mode
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -61,8 +61,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: "host -> ../.cache/target" }
       - run: tools/vendor-framework.sh host
-      - name: Start the demo (all samples, seeded)
-        run: tools/demo.sh all --port 3900
+      # APP_ENV=production with fresh random secrets, email logged, admin views off (their default),
+      # no /dev tools: the surface a deployed app exposes (security.md, Automated enforcement).
+      - name: Start the app in production mode (all samples, migrated and seeded)
+        run: tools/demo.sh all --port 3900 --production
       - name: ZAP baseline (fails on any WARN not triaged in .zap/rules.tsv)
         run: |
           chmod 777 .zap
@@ -71,6 +73,8 @@ jobs:
       - if: failure()
         uses: actions/upload-artifact@v7
         with: { name: zap-report, path: .zap/zap-report.html, if-no-files-found: ignore }
+      - if: always()
+        run: tail -50 demo/demo.log || true
       - if: always()
         run: tools/demo.sh stop
 
