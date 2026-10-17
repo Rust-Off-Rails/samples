@@ -1,0 +1,33 @@
+{# The "Ask AI" panel: how to turn it on, or the exact request, suggested prompts and the form. #}
+<div class="ai-body" data-ai-root>
+{% if !p.configured %}
+  <div class="ai-setup" role="note">
+    <h3>Turn on the assistant</h3>
+    <p>Bring your own provider and key. Set these in <code>.env</code> and restart the server:</p>
+    <pre class="code" tabindex="0">DASHBOARD_AI_PROVIDER=anthropic
+DASHBOARD_AI_API_KEY=…
+# DASHBOARD_AI_MODEL=claude-sonnet-5-5   (or claude-opus-5-5, claude-haiku-5-5)</pre>
+    <p>A local model works too: <code>DASHBOARD_AI_PROVIDER=openai-compatible</code>, <code>DASHBOARD_AI_BASE_URL=http://localhost:11434/v1</code> (Ollama) and <code>DASHBOARD_AI_MODEL</code>.</p>
+    <p class="hint">You see the exact request before anything is sent. It is built from what this page shows, redacted: SQL fingerprints, route patterns, names and types. Never rows, env values, cookies or tokens. The key is never shown, logged or stored.</p>
+  </div>
+{% else %}
+  {% if let Some(e) = p.error %}<p class="notice-inline" role="alert">{{ e }}</p>{% endif %}
+  <form class="ai-form" method="post" action="{{ p.base }}/ai/ask" data-ai-form>
+    <input type="hidden" name="prepared" value="{{ p.prepared }}">
+    <input type="hidden" name="tab" value="{{ p.tab }}">
+    <input type="hidden" name="item" value="{{ p.item }}">
+    <div class="ai-prompts" role="group" aria-label="Suggested questions">{% for s in p.suggestions %}<button type="button" class="chip" data-ai-prompt>{{ s }}</button>{% endfor %}</div>
+    <label class="ai-label" for="ai-q-{{ p.tab }}">Your question <span class="muted">({{ p.tab_label }}{% if !p.item.is_empty() %}: {{ p.item }}{% endif %})</span></label>
+    <textarea id="ai-q-{{ p.tab }}" name="question" rows="3" maxlength="2000" required data-ai-question>{{ p.question }}</textarea>
+    <details class="ai-preview"><summary>Preview what will be sent <span class="muted">({{ p.chars }} characters, about {{ p.tokens }} tokens, to {{ p.provider }} · {{ p.model }})</span></summary>
+      <p class="hint">POST <code>{{ p.endpoint }}</code></p>
+      <pre class="code" tabindex="0" aria-label="Headers">{% for h in p.headers %}{{ h }}
+{% endfor %}</pre>
+      <pre class="code ai-json" tabindex="0" aria-label="Body" data-ai-preview>{{ p.preview }}</pre>
+      {% if p.truncated %}<p class="notice-inline">The page's data was over the size cap and was cut (MAX_CONTEXT_CHARS).</p>{% endif %}
+    </details>
+    <div class="row ai-actions"><button class="btn primary" data-ai-send>Ask</button><span class="ai-busy" data-ai-busy hidden><span class="spinner" aria-hidden="true"></span> Asking {{ p.provider }}…</span><span class="muted small">{{ p.left }}</span></div>
+  </form>
+  <div class="ai-answer" data-ai-answer aria-live="polite"></div>
+{% endif %}
+</div>

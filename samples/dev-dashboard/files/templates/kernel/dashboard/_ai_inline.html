@@ -1,0 +1,1 @@
+{% match x %}{% when ai::Inline::Text with (s) %}{{ s }}{% when ai::Inline::Code with (s) %}<code>{{ s }}</code>{% when ai::Inline::Strong with (s) %}<strong>{{ s }}</strong>{% when ai::Inline::Guide with (s, href) %}<a href="{{ href }}" rel="noopener noreferrer" target="_blank">{{ s }}</a>{% endmatch %}

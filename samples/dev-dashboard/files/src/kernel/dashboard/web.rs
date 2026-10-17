@@ -28,7 +28,8 @@ use super::charts::{self, ChartView, Heatmap, SeriesSpec, Spark, Unit, Window};
 use super::series::{Range, Sample};
 use super::trace::{LogLine, Trace, WaterRow};
 use super::{
-    HUB, github, http, insights, lab, lock, panels, route_explorer as rx, schema, sql, testruns,
+    HUB, ai, ai_context, github, http, insights, lab, lock, panels, route_explorer as rx, schema,
+    sql, testruns,
 };
 use crate::error::AppError;
 use crate::kernel::cookie;
@@ -120,6 +121,33 @@ pub struct Dash {
     pub live: String,
     /// Seconds between live updates.
     pub refresh: u64,
+    /// The "Ask AI" panel for this page: its tab key ("" for none) and item.
+    pub ai_tab: &'static str,
+    pub ai_item: String,
+    /// The assistant is available here (so "Ask about this" links show).
+    pub ai_on: bool,
+}
+
+impl Dash {
+    /// Puts the "Ask AI" panel on this page, when the assistant may answer here.
+    pub fn ai(
+        mut self,
+        config: &crate::config::Config,
+        tab: ai::Tab,
+        item: Option<String>,
+    ) -> Self {
+        self.ai_on = ai::allowed(config, self.ro);
+        if self.ai_on && (!self.ro || tab.in_read_only()) {
+            self.ai_tab = tab.key();
+            self.ai_item = item.unwrap_or_default();
+        }
+        self
+    }
+
+    /// The assistant's page for `tab` (and one item of it): the "Ask about this" links.
+    pub fn ask_href(&self, tab: &str, item: &str) -> String {
+        format!("{}/ai?tab={tab}&item={item}", self.base)
+    }
 }
 
 fn dash(mode: Mode, page: &str, live: Option<String>, refresh: u64) -> Dash {
@@ -152,6 +180,9 @@ fn dash(mode: Mode, page: &str, live: Option<String>, refresh: u64) -> Dash {
             .collect(),
         live: live.unwrap_or_default(),
         refresh,
+        ai_tab: "",
+        ai_item: String::new(),
+        ai_on: false,
     }
 }
 
@@ -198,6 +229,10 @@ pub fn dev_router() -> Router<AppState> {
         .route("/dev/dashboard/logs/stream", get(logs_stream))
         .route("/dev/dashboard/sql/{id}/explain", post(explain))
         .route("/dev/dashboard/schema", get(schema_page))
+        .route("/dev/dashboard/schema/erd.svg", get(erd_svg))
+        .route("/dev/dashboard/schema/erd.mmd", get(erd_mermaid))
+        .route("/dev/dashboard/schema/tables/{name}", get(schema_table))
+        .route("/dev/dashboard/schema/migrations", get(migrations_page))
         .route("/dev/dashboard/tests", get(tests_page))
         .route("/dev/dashboard/tests/run", post(tests_run))
         .route("/dev/dashboard/github", get(github_page))
@@ -236,6 +271,11 @@ fn read_routes(r: Router<AppState>, base: &'static str) -> Router<AppState> {
         .route(&p("/sql/{id}"), get(sql_show))
         .route(&p("/config"), get(config_page))
         .route(&p("/stream"), get(stream))
+        // Ask AI: each handler answers 404 unless `ai::allowed` (development, or production with
+        // DASHBOARD_AI_IN_PRODUCTION=true behind the admin gate).
+        .route(&p("/ai"), get(ai_page))
+        .route(&p("/ai/panel"), get(ai_panel))
+        .route(&p("/ai/ask"), post(ai_ask))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -592,7 +632,8 @@ async fn overview(
             "",
             Some(format!("{}/stream?view=overview", mode.base)),
             1,
-        ),
+        )
+        .ai(&state.config, ai::Tab::Overview, None),
         cards: cards(mode),
         panels: if mode.ro {
             Vec::new()
@@ -1002,7 +1043,8 @@ async fn requests_page(
             "/requests",
             Some(format!("{}/stream?view=requests&sort={sort}", mode.base)),
             2,
-        ),
+        )
+        .ai(&state.config, ai::Tab::Requests, None),
         rows: request_rows(&sort),
         base: mode.base,
         sorts: sort_links(
@@ -1127,7 +1169,7 @@ async fn traces_page(
     );
     ui::page(TracesPage {
         chrome: chrome(&state, "Traces", "dashboard", flash, theme),
-        d: dash(mode, "/traces", Some(live), 2),
+        d: dash(mode, "/traces", Some(live), 2).ai(&state.config, ai::Tab::Traces, None),
         rows: trace_rows(&filtered_traces(&q)),
         base: mode.base,
         filters,
@@ -1204,7 +1246,11 @@ async fn trace_page(
     sql.truncate(200);
     ui::page(TracePage {
         chrome: chrome(&state, "Trace", "dashboard", flash, theme),
-        d: dash(mode, "/traces", None, 0),
+        d: dash(mode, "/traces", None, 0).ai(
+            &state.config,
+            ai::Tab::Traces,
+            Some(t.id.to_string()),
+        ),
         tone: status_tone(t.status),
         dur: micros(t.dur_us),
         when: ui::utc(t.at),
@@ -1309,7 +1355,7 @@ async fn sql_page(
         .collect();
     ui::page(SqlPage {
         chrome: chrome(&state, "SQL", "dashboard", flash, theme),
-        d: dash(mode, "/sql", None, 0),
+        d: dash(mode, "/sql", None, 0).ai(&state.config, ai::Tab::Sql, None),
         rows: sql_views(rows, mode.ro),
         n_plus_one: n_plus_one_rows(50),
         sorts: sort_links(
@@ -1396,7 +1442,7 @@ async fn sql_detail(
     };
     ui::page(SqlShowPage {
         chrome: chrome(state, "Query", "dashboard", flash, theme),
-        d: dash(mode, "/sql", None, 0),
+        d: dash(mode, "/sql", None, 0).ai(&state.config, ai::Tab::Sql, Some(q.id.clone())),
         q,
         plan,
         plan_error,
@@ -1537,7 +1583,7 @@ async fn logs_page(
     let since = lines.first().map_or(0, |l| l.id);
     ui::page(LogsPage {
         chrome: chrome(&state, "Logs", "dashboard", flash, theme),
-        d: dash(DEV, "/logs", None, 0),
+        d: dash(DEV, "/logs", None, 0).ai(&state.config, ai::Tab::Logs, None),
         stream: format!("/dev/dashboard/logs/stream?{}&since={since}", f.query()),
         lines,
         f,
@@ -1747,7 +1793,7 @@ pub struct FindingView {
 
 const DISMISSED_COOKIE: &str = "dashboard_dismissed";
 
-fn finding_id(key: &str) -> String {
+pub fn finding_id(key: &str) -> String {
     format!("{:08x}", sql::fingerprint_id(key) as u32)
 }
 
@@ -1840,7 +1886,7 @@ async fn insights_page(
         .collect();
     ui::page(InsightsPage {
         chrome: chrome(&state, "Insights", "dashboard", flash, theme),
-        d: dash(DEV, "/insights", None, 0),
+        d: dash(DEV, "/insights", None, 0).ai(&state.config, ai::Tab::Insights, None),
         findings,
         hidden,
         counts,
@@ -2352,7 +2398,7 @@ async fn routes_page(
     .collect();
     ui::page(RoutesPage {
         chrome: chrome(&state, "Routes", "dashboard-routes", flash, theme),
-        d: dash(DEV, "/routes", None, 0),
+        d: dash(DEV, "/routes", None, 0).ai(&state.config, ai::Tab::Routes, None),
         total: routes.len(),
         shown,
         untested: p.untested.len(),
@@ -2368,13 +2414,14 @@ async fn routes_page(
 }
 
 // ---------------------------------------------------------------------------------------------
-// Schema
+// Schema: the diagram, the tables (its text alternative), one table, the migrations
 // ---------------------------------------------------------------------------------------------
 
 pub struct TableView {
     pub name: String,
     pub rows: String,
     pub size: String,
+    pub area: &'static str,
     pub columns: Vec<schema::Column>,
     pub indexes: Vec<schema::Index>,
     pub fks: Vec<schema::ForeignKey>,
@@ -2383,14 +2430,79 @@ pub struct TableView {
     pub col_fk: Vec<String>,
 }
 
+fn table_view(t: schema::Table) -> TableView {
+    let unindexed = t
+        .unindexed_fks()
+        .iter()
+        .map(|fk| fk.columns.join(", "))
+        .collect();
+    let col_fk = t
+        .columns
+        .iter()
+        .map(|c| {
+            t.fks
+                .iter()
+                .find(|fk| fk.columns.contains(&c.name))
+                .map(|fk| fk.table.clone())
+                .unwrap_or_default()
+        })
+        .collect();
+    TableView {
+        col_fk,
+        rows: t
+            .rows
+            .map_or_else(|| "?".into(), |n| ui::thousands(n as u64)),
+        size: t.bytes.map(|b| bytes(b as u64)).unwrap_or_default(),
+        area: super::erd::area(&t.name),
+        name: t.name,
+        columns: t.columns,
+        indexes: t.indexes,
+        fks: t.fks,
+        unindexed,
+    }
+}
+
+fn backend_name(state: &AppState) -> &'static str {
+    match state.db.get_database_backend() {
+        sea_orm::DbBackend::Postgres => "Postgres",
+        _ => "SQLite",
+    }
+}
+
+/// The segmented control under the Schema heading.
+fn schema_tabs(current: &str) -> Vec<RangeLink> {
+    [
+        ("Diagram and tables", "/dev/dashboard/schema"),
+        ("Migrations", "/dev/dashboard/schema/migrations"),
+    ]
+    .iter()
+    .map(|(label, href)| RangeLink {
+        label,
+        href: (*href).into(),
+        current: *href == current,
+    })
+    .collect()
+}
+
+async fn catalog(state: &AppState) -> (Vec<schema::Table>, Option<String>) {
+    match http::quietly(schema::tables(&state.db)).await {
+        Ok(t) => (t, None),
+        Err(e) => (Vec::new(), Some(e.to_string())),
+    }
+}
+
 #[derive(Template)]
 #[template(path = "kernel/dashboard/schema.html")]
 struct SchemaPage {
     chrome: Chrome,
     d: Dash,
+    tabs: Vec<RangeLink>,
+    erd: super::erd::Erd,
+    mermaid: String,
     tables: Vec<TableView>,
-    applied: Vec<String>,
+    applied: usize,
     pending: Vec<String>,
+    drift: usize,
     backend: &'static str,
     error: Option<String>,
 }
@@ -2400,59 +2512,539 @@ async fn schema_page(
     theme: ThemeSwitch,
     flash: Option<Extension<RequestFlash>>,
 ) -> Response {
-    let (tables, error) = match http::quietly(schema::tables(&state.db)).await {
-        Ok(t) => (t, None),
-        Err(e) => (Vec::new(), Some(e.to_string())),
-    };
-    let tables = tables
-        .into_iter()
-        .map(|t| {
-            let unindexed = t
-                .unindexed_fks()
-                .iter()
-                .map(|fk| fk.columns.join(", "))
-                .collect();
-            let col_fk = t
-                .columns
-                .iter()
-                .map(|c| {
-                    t.fks
-                        .iter()
-                        .find(|fk| fk.columns.contains(&c.name))
-                        .map(|fk| fk.table.clone())
-                        .unwrap_or_default()
-                })
-                .collect();
-            TableView {
-                col_fk,
-                rows: t
-                    .rows
-                    .map_or_else(|| "?".into(), |n| ui::thousands(n as u64)),
-                size: t.bytes.map(|b| bytes(b as u64)).unwrap_or_default(),
-                name: t.name,
-                columns: t.columns,
-                indexes: t.indexes,
-                fks: t.fks,
-                unindexed,
-            }
-        })
-        .collect();
+    let (tables, error) = catalog(&state).await;
+    let erd = super::erd::build(&tables);
+    let report = super::migrations::report(&state.db, &tables, &root()).await;
+    let pending = report.pending().iter().map(|m| m.name.clone()).collect();
     ui::page(SchemaPage {
-        chrome: chrome(&state, "Schema", "dashboard", flash, theme),
-        d: dash(DEV, "/schema", None, 0),
-        tables,
-        applied: crate::controllers::migrations::applied(&state.db)
-            .await
-            .unwrap_or_default(),
-        pending: crate::controllers::migrations::pending(&state.db)
-            .await
-            .unwrap_or_default(),
-        backend: match state.db.get_database_backend() {
-            sea_orm::DbBackend::Postgres => "Postgres",
-            _ => "SQLite",
-        },
+        chrome: chrome(&state, "Schema", "dashboard", flash, theme)
+            .script(state.assets.path("kernel/dashboard-erd.js")),
+        d: dash(DEV, "/schema", None, 0).ai(&state.config, ai::Tab::Schema, None),
+        tabs: schema_tabs("/dev/dashboard/schema"),
+        mermaid: super::erd::mermaid(&erd),
+        erd,
+        tables: tables.into_iter().map(table_view).collect(),
+        applied: report.migrations.iter().filter(|m| m.applied()).count(),
+        pending,
+        drift: report.drift.len(),
+        backend: backend_name(&state),
         error,
     })
+}
+
+/// `GET /dev/dashboard/schema/erd.svg`: the diagram as a file (Export SVG).
+async fn erd_svg(State(state): State<AppState>) -> Response {
+    let (tables, _) = catalog(&state).await;
+    (
+        [
+            (header::CONTENT_TYPE, "image/svg+xml; charset=utf-8"),
+            (
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=\"schema.svg\"",
+            ),
+        ],
+        super::erd::standalone_svg(&super::erd::build(&tables)),
+    )
+        .into_response()
+}
+
+/// `GET /dev/dashboard/schema/erd.mmd`: Mermaid `erDiagram` text, for docs or an LLM.
+async fn erd_mermaid(State(state): State<AppState>) -> Response {
+    let (tables, _) = catalog(&state).await;
+    (
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        super::erd::mermaid(&super::erd::build(&tables)),
+    )
+        .into_response()
+}
+
+pub struct QueryRef {
+    pub id: String,
+    pub sql: String,
+    pub count: String,
+    pub p95: String,
+    pub last: String,
+}
+
+/// Recorded statements that name `table` (as a whole identifier, quoted or not).
+pub fn queries_touching(table: &str, limit: usize) -> Vec<QueryRef> {
+    let now = Utc::now();
+    lock(&HUB.sql)
+        .rows(sql::Sort::Recent)
+        .into_iter()
+        .filter(|r| {
+            r.sql
+                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .any(|w| w.eq_ignore_ascii_case(table))
+        })
+        .take(limit)
+        .map(|r| QueryRef {
+            sql: r.sql.to_string(),
+            count: ui::thousands(r.count),
+            p95: micros(r.p95),
+            last: ui::ago(r.last, now),
+            id: r.id,
+        })
+        .collect()
+}
+
+pub struct EdgeRef {
+    pub table: String,
+    pub text: String,
+}
+
+#[derive(Template)]
+#[template(path = "kernel/dashboard/schema_table.html")]
+struct SchemaTablePage {
+    chrome: Chrome,
+    d: Dash,
+    t: TableView,
+    parents: Vec<EdgeRef>,
+    children: Vec<EdgeRef>,
+    queries: Vec<QueryRef>,
+    created_by: Option<(String, String, Option<String>)>,
+    changed_by: Vec<(String, String)>,
+}
+
+/// `GET /dev/dashboard/schema/tables/{name}`: one table, its neighbours, the queries that touch
+/// it, the migration that created it. `dashboard-erd.js` shows the same page's detail block
+/// beside the diagram when a table is clicked.
+async fn schema_table(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    theme: ThemeSwitch,
+    flash: Option<Extension<RequestFlash>>,
+) -> Response {
+    let (mut tables, _) = catalog(&state).await;
+    // SECURITY: only a name the catalog itself returned is looked up; nothing from the URL
+    // reaches SQL (test: only_plain_identifiers_reach_catalog_sql).
+    let Some(pos) = tables.iter().position(|t| t.name == name) else {
+        return back(
+            "/dev/dashboard/schema",
+            Flash::alert("No such table (it may have been dropped)."),
+        );
+    };
+    let erd = super::erd::build(&tables);
+    let edge_text = |e: &super::erd::ErdEdge| e.sentence();
+    let parents = erd
+        .edges
+        .iter()
+        .filter(|e| e.child == name)
+        .map(|e| EdgeRef {
+            table: e.parent.clone(),
+            text: edge_text(e),
+        })
+        .collect();
+    let children = erd
+        .edges
+        .iter()
+        .filter(|e| e.parent == name && e.child != name)
+        .map(|e| EdgeRef {
+            table: e.child.clone(),
+            text: edge_text(e),
+        })
+        .collect();
+    let report = super::migrations::report(&state.db, &tables, &root()).await;
+    let mut created_by = None;
+    let mut changed_by = Vec::new();
+    for m in &report.migrations {
+        for e in &m.effects {
+            match e {
+                super::migrations::Effect::CreateTable { table, .. } if *table == name => {
+                    created_by = Some((m.name.clone(), e.text(), m.file.clone()));
+                }
+                super::migrations::Effect::AlterTable { table, .. } if *table == name => {
+                    changed_by.push((m.name.clone(), e.text()));
+                }
+                _ => {}
+            }
+        }
+    }
+    let t = table_view(tables.swap_remove(pos));
+    ui::page(SchemaTablePage {
+        chrome: chrome(&state, &t.name, "dashboard", flash, theme),
+        d: dash(DEV, "/schema", None, 0).ai(&state.config, ai::Tab::Schema, Some(t.name.clone())),
+        parents,
+        children,
+        queries: queries_touching(&t.name, 10),
+        created_by,
+        changed_by,
+        t,
+    })
+}
+
+pub struct MigrationView {
+    pub name: String,
+    pub applied: bool,
+    pub when: String,
+    pub at: String,
+    pub area: &'static str,
+    pub file: Option<String>,
+    pub effects: Vec<(&'static str, String)>,
+    pub edited: bool,
+}
+
+#[derive(Template)]
+#[template(path = "kernel/dashboard/migrations.html")]
+struct MigrationsPage {
+    chrome: Chrome,
+    d: Dash,
+    tabs: Vec<RangeLink>,
+    migrations: Vec<MigrationView>,
+    pending: usize,
+    applied: usize,
+    unknown: Vec<(String, String)>,
+    drift: Vec<super::migrations::Drift>,
+    backend: &'static str,
+}
+
+/// `GET /dev/dashboard/schema/migrations`: the timeline, newest first, and the drift.
+async fn migrations_page(
+    State(state): State<AppState>,
+    theme: ThemeSwitch,
+    flash: Option<Extension<RequestFlash>>,
+) -> Response {
+    let (tables, _) = catalog(&state).await;
+    let report = super::migrations::report(&state.db, &tables, &root()).await;
+    let now = Utc::now();
+    let mut migrations: Vec<MigrationView> = report
+        .migrations
+        .iter()
+        .map(|m| MigrationView {
+            name: m.name.clone(),
+            applied: m.applied(),
+            when: m.applied_at.map(|t| ui::ago(t, now)).unwrap_or_default(),
+            at: m.applied_at.map(ui::utc).unwrap_or_default(),
+            area: m.area,
+            file: m.file.clone(),
+            effects: m.effects.iter().map(|e| (e.tone(), e.text())).collect(),
+            edited: m.edited,
+        })
+        .collect();
+    migrations.reverse();
+    ui::page(MigrationsPage {
+        chrome: chrome(&state, "Migrations", "dashboard", flash, theme),
+        d: dash(DEV, "/schema", None, 0).ai(&state.config, ai::Tab::Migrations, None),
+        tabs: schema_tabs("/dev/dashboard/schema/migrations"),
+        pending: migrations.iter().filter(|m| !m.applied).count(),
+        applied: migrations.iter().filter(|m| m.applied).count(),
+        migrations,
+        unknown: report
+            .unknown_applied
+            .iter()
+            .map(|(n, at)| (n.clone(), at.map(ui::utc).unwrap_or_default()))
+            .collect(),
+        drift: report.drift,
+        backend: backend_name(&state),
+    })
+}
+
+// ---------------------------------------------------------------------------------------------
+// Ask AI (ai.rs, ai_context.rs)
+// ---------------------------------------------------------------------------------------------
+
+#[derive(Debug, Default, Deserialize)]
+struct AiQuery {
+    tab: Option<String>,
+    item: Option<String>,
+}
+
+/// The panel: how to enable it, or the prepared context's preview, the prompts and the form.
+pub struct AiPanel {
+    pub configured: bool,
+    pub base: &'static str,
+    pub tab: &'static str,
+    pub tab_label: &'static str,
+    pub item: String,
+    pub provider: &'static str,
+    pub model: String,
+    pub endpoint: String,
+    pub prepared: String,
+    pub headers: Vec<String>,
+    /// The exact JSON body, with the question shown as a placeholder until it is typed.
+    pub preview: String,
+    pub chars: usize,
+    pub tokens: usize,
+    pub truncated: bool,
+    pub suggestions: &'static [&'static str],
+    pub question: String,
+    pub left: String,
+    pub error: Option<String>,
+}
+
+pub struct AiAnswer {
+    pub blocks: Vec<ai::Block>,
+    pub note: Option<String>,
+    pub error: Option<String>,
+    pub usage: String,
+    /// The body that was sent, for the "What was sent" disclosure.
+    pub sent: String,
+}
+
+#[derive(Template)]
+#[template(path = "kernel/dashboard/_ai_panel.html")]
+struct AiPanelFragment {
+    p: AiPanel,
+}
+
+#[derive(Template)]
+#[template(path = "kernel/dashboard/_ai_answer.html")]
+struct AiAnswerFragment {
+    a: AiAnswer,
+}
+
+#[derive(Template)]
+#[template(path = "kernel/dashboard/ai.html")]
+struct AiPage {
+    chrome: Chrome,
+    d: Dash,
+    p: AiPanel,
+    a: Option<AiAnswer>,
+}
+
+/// A question placeholder in the preview; the script fills in what is typed.
+const QUESTION_SLOT: &str = "{your question}";
+
+fn provider_label(ai: &crate::config::DashboardAi) -> &'static str {
+    match ai.provider {
+        Some(crate::config::AiProvider::Anthropic) => "Anthropic",
+        Some(crate::config::AiProvider::OpenAiCompatible) => "OpenAI-compatible",
+        None => "not configured",
+    }
+}
+
+fn tab_and_item(
+    q_tab: Option<&str>,
+    q_item: Option<&str>,
+) -> Result<(ai::Tab, Option<String>), AppError> {
+    let tab = q_tab.and_then(ai::Tab::parse).ok_or(AppError::NotFound)?;
+    let item = q_item.map(str::trim).filter(|i| !i.is_empty());
+    match item {
+        Some(i) if !tab.valid_item(i) => Err(AppError::NotFound),
+        Some(i) => Ok((tab, Some(i.to_owned()))),
+        None => Ok((tab, None)),
+    }
+}
+
+/// Builds the context for `tab` and stores it for the Ask button; the panel shows its preview.
+async fn ai_panel_for(
+    state: &AppState,
+    mode: Mode,
+    tab: ai::Tab,
+    item: Option<String>,
+    question: String,
+    error: Option<String>,
+) -> AiPanel {
+    let cfg = &state.config.dashboard.ai;
+    let mut p = AiPanel {
+        configured: cfg.provider.is_some(),
+        base: mode.base,
+        tab: tab.key(),
+        tab_label: tab.label(),
+        item: item.clone().unwrap_or_default(),
+        provider: provider_label(cfg),
+        model: cfg.model.clone(),
+        endpoint: ai::endpoint(cfg),
+        prepared: String::new(),
+        headers: ai::header_lines(cfg),
+        preview: String::new(),
+        chars: 0,
+        tokens: 0,
+        truncated: false,
+        suggestions: tab.suggestions(item.is_some()),
+        question,
+        left: lock(&ai::BUDGET).left(ai::today()),
+        error,
+    };
+    if !p.configured {
+        return p;
+    }
+    let context = match http::quietly(ai_context::build(state, mode.ro, tab, item.as_deref())).await
+    {
+        Ok(c) => c,
+        Err(e) => {
+            p.error = Some(e);
+            return p;
+        }
+    };
+    let prepared = ai::store(tab, item, context);
+    let body = ai::body(
+        cfg,
+        &prepared.system,
+        &ai::user_message(&prepared, QUESTION_SLOT),
+    );
+    p.preview = serde_json::to_string_pretty(&body).unwrap_or_default();
+    p.chars = p.preview.chars().count();
+    // WHY: an estimate (4 characters a token) for the preview; the provider's count is shown
+    // after the answer.
+    p.tokens = p.chars / 4;
+    p.truncated = prepared.truncated;
+    p.prepared = prepared.id;
+    p
+}
+
+/// `GET {base}/ai?tab=…&item=…`: the assistant on a page of its own (also the no-JS path and
+/// the target of every "Ask about this" link).
+async fn ai_page(
+    State(state): State<AppState>,
+    Extension(mode): Extension<Mode>,
+    Query(q): Query<AiQuery>,
+    theme: ThemeSwitch,
+    flash: Option<Extension<RequestFlash>>,
+) -> Result<Response, AppError> {
+    if !ai::allowed(&state.config, mode.ro) {
+        return Err(AppError::NotFound);
+    }
+    let (tab, item) = tab_and_item(q.tab.as_deref().or(Some("overview")), q.item.as_deref())?;
+    if mode.ro && !tab.in_read_only() {
+        return Err(AppError::NotFound);
+    }
+    let p = ai_panel_for(&state, mode, tab, item, String::new(), None).await;
+    Ok(ui::page(AiPage {
+        chrome: chrome(&state, "Ask AI", "dashboard", flash, theme),
+        d: dash(mode, "/ai", None, 0),
+        p,
+        a: None,
+    }))
+}
+
+/// `GET {base}/ai/panel?tab=…`: the panel as a fragment, loaded when the page's "Ask AI" opens.
+async fn ai_panel(
+    State(state): State<AppState>,
+    Extension(mode): Extension<Mode>,
+    Query(q): Query<AiQuery>,
+) -> Result<Response, AppError> {
+    if !ai::allowed(&state.config, mode.ro) {
+        return Err(AppError::NotFound);
+    }
+    let (tab, item) = tab_and_item(q.tab.as_deref(), q.item.as_deref())?;
+    if mode.ro && !tab.in_read_only() {
+        return Err(AppError::NotFound);
+    }
+    let p = ai_panel_for(&state, mode, tab, item, String::new(), None).await;
+    Ok(ui::page(AiPanelFragment { p }))
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct AskForm {
+    #[serde(default)]
+    prepared: String,
+    #[serde(default)]
+    tab: String,
+    #[serde(default)]
+    item: String,
+    #[serde(default)]
+    question: String,
+}
+
+/// `POST {base}/ai/ask`: sends the prepared context and the question. With the script it answers
+/// a fragment (`x-dashboard-fragment: 1`); without it, the whole page.
+async fn ai_ask(
+    State(state): State<AppState>,
+    Extension(mode): Extension<Mode>,
+    headers: HeaderMap,
+    theme: ThemeSwitch,
+    Form(f): Form<AskForm>,
+) -> Result<Response, AppError> {
+    if !ai::allowed(&state.config, mode.ro) {
+        return Err(AppError::NotFound);
+    }
+    let (tab, item) = tab_and_item(Some(&f.tab), Some(&f.item))?;
+    if mode.ro && !tab.in_read_only() {
+        return Err(AppError::NotFound);
+    }
+    let fragment = headers.contains_key("x-dashboard-fragment");
+    let question: String = f
+        .question
+        .trim()
+        .chars()
+        .take(ai::MAX_QUESTION_CHARS)
+        .collect();
+    let answer = ask(state.clone(), &f.prepared, tab, item.as_deref(), &question).await;
+    if fragment {
+        return Ok(ui::page(AiAnswerFragment { a: answer }));
+    }
+    let p = ai_panel_for(&state, mode, tab, item, question, None).await;
+    Ok(ui::page(AiPage {
+        chrome: chrome(&state, "Ask AI", "dashboard", None, theme),
+        d: dash(mode, "/ai", None, 0),
+        p,
+        a: Some(answer),
+    }))
+}
+
+async fn ask(
+    state: AppState,
+    prepared_id: &str,
+    tab: ai::Tab,
+    item: Option<&str>,
+    question: &str,
+) -> AiAnswer {
+    let fail = |e: String| AiAnswer {
+        blocks: Vec::new(),
+        note: None,
+        error: Some(e),
+        usage: String::new(),
+        sent: String::new(),
+    };
+    let cfg = &state.config.dashboard.ai;
+    if cfg.provider.is_none() {
+        return fail(ai::AiError::NotConfigured.message());
+    }
+    if question.is_empty() {
+        return fail("Type a question first (or pick a suggested one).".into());
+    }
+    // SECURITY: only a context the developer was shown goes out: the prepared id must exist and
+    // match the page; otherwise nothing is sent (test: only_the_previewed_context_is_sent)
+    let Some(p) = ai::prepared(prepared_id).filter(|p| p.tab == tab && p.item.as_deref() == item)
+    else {
+        return fail(
+            "The preview expired or belongs to another page. Review the refreshed preview, then ask again."
+                .into(),
+        );
+    };
+    if let Err(e) = lock(&ai::BUDGET).reserve(ai::today(), std::time::Instant::now()) {
+        return fail(e.message());
+    }
+    let body = ai::body(cfg, &p.system, &ai::user_message(&p, question));
+    let started = std::time::Instant::now();
+    let result = ai::send(cfg, &body, ai::TIMEOUT).await;
+    let sent = serde_json::to_string_pretty(&body).unwrap_or_default();
+    match result {
+        Ok(a) => {
+            let tokens = a.input_tokens + a.output_tokens;
+            lock(&ai::BUDGET).spend(ai::today(), tokens);
+            tracing::info!(
+                provider = provider_label(cfg),
+                model = %cfg.model,
+                tab = tab.key(),
+                input_tokens = a.input_tokens,
+                output_tokens = a.output_tokens,
+                ms = started.elapsed().as_millis() as u64,
+                "dashboard: the AI assistant answered"
+            );
+            AiAnswer {
+                blocks: ai::render(&a.text),
+                note: a.note,
+                error: None,
+                usage: format!(
+                    "{} in, {} out · {} · {}",
+                    ui::thousands(a.input_tokens),
+                    ui::thousands(a.output_tokens),
+                    micros(started.elapsed().as_micros() as u64),
+                    lock(&ai::BUDGET).left(ai::today())
+                ),
+                sent,
+            }
+        }
+        Err(e) => {
+            tracing::warn!(provider = provider_label(cfg), error = ?e, "dashboard: the AI assistant failed");
+            AiAnswer {
+                sent,
+                ..fail(e.message())
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -3125,7 +3717,8 @@ async fn tests_page(
             "/tests",
             Some("/dev/dashboard/stream?view=tests".into()),
             1,
-        ),
+        )
+        .ai(&state.config, ai::Tab::Tests, None),
         runs: rows,
         selected,
         slowest,

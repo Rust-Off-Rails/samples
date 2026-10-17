@@ -21,6 +21,7 @@
     <p class="fix"><strong>Fix:</strong> {{ f.fix }} <a href="{{ f.guide_url }}" rel="noopener noreferrer" class="guide"><code>{{ f.guide }}</code></a></p>
     <div class="finding-actions">
       <a class="btn" href="{{ f.href }}">See the evidence</a>
+      {% if d.ai_on %}<a class="btn quiet" href="{{ d.ask_href("insights", &f.id) }}">Ask AI about this</a>{% endif %}
       <form method="post" action="/dev/dashboard/insights/dismiss"><input type="hidden" name="id" value="{{ f.id }}"><button class="btn quiet">Dismiss for this session</button></form>
     </div>
   </li>

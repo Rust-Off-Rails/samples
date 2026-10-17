@@ -15,6 +15,8 @@
 //! | Traces and live logs | a `tracing-subscriber` layer | `trace.rs` |
 //! | Load lab: fake data, traffic, scenarios | `/dev/dashboard/lab`, `/dev/lab/*`, `app bench` | `lab.rs` |
 //! | Insights, routes explorer, schema | everything above, the catalog, CSP reports | `insights.rs`, `route_explorer.rs`, `schema.rs` |
+//! | Schema diagram (ERD), migrations timeline and drift | the catalog, `seaql_migrations`, `migration/src/*.rs` | `erd.rs`, `migrations.rs` |
+//! | Ask AI (optional, your own provider) | the above, already redacted | `ai.rs`, `ai_context.rs` |
 //! | Test runs and CI | `storage/test-runs/`, the GitHub API | `testruns.rs`, `github.rs` |
 //!
 //! WHY one process-wide hub (`HUB`) and not a field on `AppState`: the tracing layer is installed
@@ -22,15 +24,19 @@
 
 pub mod access;
 // samples: dashboard mods
+pub mod ai;
+pub mod ai_context;
 pub mod charts;
 pub mod cli;
 pub mod collector;
 pub mod demo;
+pub mod erd;
 pub mod github;
 pub mod hist;
 pub mod http;
 pub mod insights;
 pub mod lab;
+pub mod migrations;
 pub mod panels;
 pub mod route_explorer;
 pub mod schema;
