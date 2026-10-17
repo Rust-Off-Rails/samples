@@ -648,7 +648,7 @@ DASHBOARD_IN_PRODUCTION=false
 # DASHBOARD_AI_BASE_URL=https://openrouter.ai/api/v1
 # DASHBOARD_AI_MODEL=meta/muse-spark-1.3   # or meta/muse-wonder (deeper), meta/muse-glimmer-30b (open weights)
 # DASHBOARD_AI_REFERER=http://localhost:3000   # optional: OpenRouter's HTTP-Referer
-# DASHBOARD_AI_TITLE=My app dev dashboard      # optional: OpenRouter's X-Title
+# DASHBOARD_AI_TITLE="My app dev dashboard"    # optional: OpenRouter's X-Title (quote values with spaces)
 '''
 
 [[wire]]
