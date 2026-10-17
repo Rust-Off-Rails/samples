@@ -33,7 +33,27 @@ BASE="$base" OUT="$root/docs/screenshots" INSTALLED="$installed" node tools/scre
 if [ $# -eq 0 ] || printf '%s\n' "$@" | grep -qx dev-dashboard; then
   case " $installed " in
     *" dev-dashboard "*)
-      BASE="$base" OUT="$root/docs/screenshots/dev-dashboard" node tools/screenshots/shoot-dev-dashboard.mjs
+      # "Ask AI" with an answer: a loopback mock provider (tools/screenshots/ai-mock.mjs, canned
+      # answers, no real API) and a second demo server pointed at it, both stopped by PID after.
+      port=${base##*:}
+      mock_port=$((port + 9))
+      ai_port=$((port + 1))
+      ai_base=""
+      if ! lsof -nP -iTCP:"$ai_port" -sTCP:LISTEN >/dev/null 2>&1 && ! lsof -nP -iTCP:"$mock_port" -sTCP:LISTEN >/dev/null 2>&1; then
+        node tools/screenshots/ai-mock.mjs "$mock_port" > demo/ai-mock.log 2>&1 &
+        mock_pid=$!
+        (cd demo/app && PORT=$ai_port DASHBOARD_AI_PROVIDER=openai-compatible \
+          DASHBOARD_AI_BASE_URL="http://127.0.0.1:$mock_port/v1" DASHBOARD_AI_MODEL=demo-model \
+          exec ../app-bin serve) > demo/ai-server.log 2>&1 &
+        ai_pid=$!
+        trap 'kill "$ai_pid" "$mock_pid" 2>/dev/null || true' EXIT
+        i=0
+        until curl -fsS "http://localhost:$ai_port/up" >/dev/null 2>&1 || [ "$i" -gt 30 ]; do sleep 1; i=$((i + 1)); done
+        ai_base="http://localhost:$ai_port"
+      else
+        echo "screenshots: port $ai_port or $mock_port is taken; skipping the Ask AI answer screens"
+      fi
+      BASE="$base" AI_BASE="$ai_base" OUT="$root/docs/screenshots/dev-dashboard" node tools/screenshots/shoot-dev-dashboard.mjs
       ;;
   esac
 fi
