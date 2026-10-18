@@ -9,7 +9,7 @@ Install the **auth-password** sample from the Rust off Rails samples (the `sampl
 1. Read `samples/auth-password/README.md` and `CHECKS.md`, and `samples/auth-core/README.md` and `CHECKS.md`, first.
 2. If this repo has `tools/install.sh`, run `tools/install.sh auth-password .` (it installs auth-core first). Otherwise follow both READMEs' "Install" steps by hand, auth-core first: the `cargo add` lines (no versions), copy each `files/` keeping paths (replace `offrails_host` with this crate's name), then each wiring step at its `samples: <anchor>` comment.
 3. Change only lines marked `// APP:` (and `{# APP: … #}`), and `paths::after_sign_in()`. Keep every `// SECURITY:`, `// INVARIANT:` and `// WHY:` line and the code under it. Never weaken a check to make a test pass; report it instead.
-4. Set `ACCOUNTS: signup` in `AGENTS.md`. Add `APP_SECRET_KEY` (≥ 32 characters) and `SMTP_URL` to the deploy configuration, never to the repo. Schedule `app task auth_cleanup` daily. Log the install in `docs/decisions.md`.
+4. Set `ACCOUNTS: password` in `AGENTS.md` (`password invite` when only invited people get accounts: then set `DEFAULT_SIGNUP = Signup::Invite` in `src/config.rs` and keep every route and test; README "Adapting it"). Add `APP_SECRET_KEY` (≥ 32 characters) and `SMTP_URL` to the deploy configuration, never to the repo. Schedule `app task auth_cleanup` daily. Log the install in `docs/decisions.md`.
 5. Put `RequireUser` on every private handler you already have, and `RequireRecentAuth` on anything that changes credentials, email or money.
 6. Prove it, and paste the output:
 

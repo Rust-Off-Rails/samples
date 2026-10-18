@@ -5,6 +5,8 @@
 #   tools/ci.sh                    every sample alone, then all of them together
 #   tools/ci.sh mailer dev-mailbox  just these (each alone)
 #   tools/ci.sh all                every sample installed into one app
+#   tools/ci.sh --prepare all      only install, cargo fmt and the CSS: the app to test elsewhere
+#                                  (CI's Windows job builds and tests it)
 #
 # Postgres: set TEST_DATABASE_URL to a server where the suite may create databases (one per test,
 # dropped after it), e.g. postgres://postgres:postgres@localhost:5432/postgres. Without it the run
@@ -16,11 +18,13 @@ set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 postgres=1
+prepare=0
 targets=""
 for arg in "$@"; do
   case "$arg" in
     --no-postgres) postgres=0 ;;
-    -h | --help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --prepare) prepare=1 ;;
+    -h | --help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) echo "ci: unknown option $arg" >&2; exit 2 ;;
     *) targets="$targets $arg" ;;
   esac
@@ -29,7 +33,7 @@ done
 all_samples=$(cd "$root/samples" && for d in */; do [ -f "$d/sample.toml" ] && printf '%s ' "${d%/}"; done)
 [ -n "$targets" ] || targets="$all_samples all"
 
-if [ "$postgres" = 1 ] && [ -z "${TEST_DATABASE_URL:-}" ]; then
+if [ "$postgres" = 1 ] && [ "$prepare" = 0 ] && [ -z "${TEST_DATABASE_URL:-}" ]; then
   echo "ci: TEST_DATABASE_URL is not set (the Postgres run is required; --no-postgres skips it)" >&2
   exit 2
 fi
@@ -40,6 +44,12 @@ unset TEST_DATABASE_URL
 [ -f "$root/host/.offrails/VERSION" ] || "$root/tools/vendor-framework.sh" "$root/host"
 # install.sh's dependency resolution, on fixtures (seconds; no cargo).
 sh "$root/tools/install-test.sh" || exit 1
+# Tests assert the sign-in landing page with paths::after_sign_in() and the account page with
+# paths::account(), never a literal: an app that moves after_sign_in() keeps every test green.
+if grep -rnE 'assert_redirect_to\("/account"\)|LOCATION\)\.unwrap\(\), "/account"\)|location\(\) == Some\("/account"\)' "$root"/samples/*/files/tests; then
+  echo "ci: the lines above hard-code \"/account\" in a redirect assertion; use paths::after_sign_in() (a sign-in) or paths::account() (an account page action)" >&2
+  exit 1
+fi
 
 export CARGO_TARGET_DIR="$root/.cache/target"
 export CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-never}"
@@ -115,6 +125,10 @@ run_one() {
   step "cargo fmt" cargo fmt --all || return 1
   check_formatted "$samples" || { echo "FAIL $name: shipped files not formatted" >&2; return 1; }
   step "css" sh -c 'bin/setup-tailwind && bin/tailwindcss -i assets/app.css -o static/app.css --minify 2>&1 | tail -1' || return 1
+  if [ "$prepare" = 1 ]; then
+    echo "prepared: $app"
+    return 0
+  fi
   step "routes" sh -c 'cargo run -q -- routes > /dev/null' || return 1
   step "clippy" cargo clippy -q --all-targets -- -D warnings || return 1
   # The framework's lint set for shipped code: no unwrap/expect outside tests (workflow.md DoD).
@@ -122,6 +136,21 @@ run_one() {
   step "tests (SQLite)" cargo nextest run --no-fail-fast --status-level fail --final-status-level fail || return 1
   if [ "$postgres" = 1 ]; then
     step "tests (Postgres)" env TEST_DATABASE_URL="$pg_url" cargo nextest run --no-fail-fast --status-level fail --final-status-level fail || return 1
+  fi
+  # With every sample in, prove the auth tests follow paths::after_sign_in() (the README tells apps
+  # to move it): rerun them with it pointing elsewhere, then put routes.rs back.
+  if [ "$name" = all ] && grep -q 'pub fn after_sign_in() -> String {' "$app/src/routes.rs"; then
+    cp "$app/src/routes.rs" "$app/../routes.rs.orig"
+    sed '/pub fn after_sign_in() -> String {/,/^ *}/ s|"/account"|"/after-sign-in-moved"|' "$app/../routes.rs.orig" > "$app/src/routes.rs"
+    if grep -q '"/after-sign-in-moved"' "$app/src/routes.rs"; then
+      step "auth tests with after_sign_in() moved (SQLite)" cargo nextest run --no-fail-fast --status-level fail --final-status-level fail -E 'test(/^(auth_|realtime_test::accounts)/)'
+      moved=$?
+    else
+      echo "FAIL $name: couldn't move after_sign_in() in src/routes.rs" >&2
+      moved=1
+    fi
+    cp "$app/../routes.rs.orig" "$app/src/routes.rs"
+    [ "$moved" = 0 ] || return 1
   fi
   step "offrails-check" sh .offrails/tools/offrails-check || return 1
   step "cargo deny" cargo deny --log-level error check || return 1
@@ -136,7 +165,9 @@ for t in $targets; do
     result="FAIL"
     failed=$((failed + 1))
   fi
-  if [ "$postgres" = 1 ]; then dbs="SQLite + Postgres"; else dbs="SQLite only (Postgres skipped)"; fi
+  if [ "$prepare" = 1 ]; then dbs="prepared, not tested"
+  elif [ "$postgres" = 1 ]; then dbs="SQLite + Postgres"
+  else dbs="SQLite only (Postgres skipped)"; fi
   summary="$summary
 $result $t ($dbs)"
 done

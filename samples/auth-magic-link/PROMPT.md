@@ -9,7 +9,7 @@ Install the **auth-magic-link** sample from the Rust off Rails samples (the `sam
 1. Read `samples/auth-magic-link/README.md` and `CHECKS.md`, and `samples/auth-core/README.md` and `CHECKS.md`, first.
 2. If this repo has `tools/install.sh`, run `tools/install.sh auth-magic-link .` (it installs auth-core first). Otherwise follow both READMEs' "Install" steps by hand, auth-core first: copy each `files/` keeping paths (replace `offrails_host` with this crate's name), the `cargo add` lines (no versions), then each wiring step at its `samples: <anchor>` comment.
 3. Change only lines marked `// APP:` (and `{# APP: … #}`), and `paths::after_sign_in()`. Keep every `// SECURITY:`, `// INVARIANT:` and `// WHY:` line and the code under it. Keep the browser binding on unless a human decides otherwise (and log that decision).
-4. Set `ACCOUNTS: magic-link` (or `magic-link-invite`, following README "Adapting it") in `AGENTS.md`. Add `APP_SECRET_KEY` (≥ 32 characters) and `SMTP_URL` to the deploy configuration, never to the repo. Schedule `app task auth_cleanup` daily. Log the install in `docs/decisions.md`.
+4. Set `ACCOUNTS: magic-link` in `AGENTS.md` (`magic-link invite` when only invited people get accounts: then set `DEFAULT_SIGNUP = Signup::Invite` in `src/config.rs` and keep every route and test; README "Adapting it"). Add `APP_SECRET_KEY` (≥ 32 characters) and `SMTP_URL` to the deploy configuration, never to the repo. Schedule `app task auth_cleanup` daily. Log the install in `docs/decisions.md`.
 5. Put `RequireUser` on every private handler, and `RequireRecentAuth` on anything that changes the email or money.
 6. Prove it, and paste the output:
 
