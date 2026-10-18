@@ -4,7 +4,7 @@ Paste this to the agent working in your Rust off Rails app:
 
 ---
 
-Install the **auth-magic-link** sample from the Rust off Rails samples (the `samples/auth-magic-link/` folder of github.com/Rust-Off-Rails/samples) into this app. It brings **auth-core** (sessions, account page, re-auth, security emails), and needs **dev-mailbox** and **mailer**.
+Install the **auth-magic-link** sample from the Rust off Rails samples (the `samples/auth-magic-link/` folder of github.com/rust-off-rails/samples) into this app. It brings **auth-core** (sessions, account page, re-auth, security emails), and needs **dev-mailbox** and **mailer**.
 
 1. Read `samples/auth-magic-link/README.md` and `CHECKS.md`, and `samples/auth-core/README.md` and `CHECKS.md`, first.
 2. If this repo has `tools/install.sh`, run `tools/install.sh auth-magic-link .` (it installs auth-core first). Otherwise follow both READMEs' "Install" steps by hand, auth-core first: copy each `files/` keeping paths (replace `offrails_host` with this crate's name), the `cargo add` lines (no versions), then each wiring step at its `samples: <anchor>` comment.

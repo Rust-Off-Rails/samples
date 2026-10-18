@@ -22,7 +22,7 @@ if [ -n "${OFFRAILS_FW:-}" ]; then
   git -C "$OFFRAILS_FW" archive "v$version" | tar -x -C "$work"
   src=$work
 else
-  base="https://github.com/Rust-Off-Rails/rustoffrails/releases/download/v$version"
+  base="https://github.com/rust-off-rails/rustoffrails/releases/download/v$version"
   curl -sSLf "$base/rustoffrails.tar.gz" -o "$work/rustoffrails.tar.gz"
   curl -sSLf "$base/checksums.txt" -o "$work/checksums.txt"
   expected=$(awk '$2 == "rustoffrails.tar.gz" { print $1 }' "$work/checksums.txt")
