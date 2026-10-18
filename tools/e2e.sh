@@ -1,6 +1,7 @@
 #!/bin/sh
 # Real-browser checks that need the running app: every interactive page reached through a boosted
-# link or form, the way people reach it (tools/screenshots/e2e-boosted.mjs). CI runs it.
+# link or form, the way people reach it (tools/screenshots/e2e-boosted.mjs), and every kernel page at a
+# phone's width without sideways scrolling (tools/screenshots/fit-phone.mjs). CI runs it.
 #
 #   tools/e2e.sh                 uses the demo started here if it runs, else builds and starts one
 #                                with every sample (port $PORT, default 4000) and stops it after
@@ -20,3 +21,5 @@ trap stop EXIT
 base=$(cat demo/demo.url)
 (cd tools/screenshots && pnpm install --frozen-lockfile --silent)
 BASE="$base" node tools/screenshots/e2e-boosted.mjs
+# Every dashboard tab, the jobs pages and the mailbox fit a 390 px phone (no sideways scroll).
+BASE="$base" node tools/screenshots/fit-phone.mjs

@@ -171,6 +171,16 @@ fn the_dashboard_stylesheet_follows_the_theme_switch() {
     }
 }
 
+/// At a phone's width no tab scrolls sideways: a wide table scrolls inside its `.scroll` box, and
+/// the box contains the absolutely positioned visually-hidden labels in its cells (before, they sat
+/// at the table's far edge and widened the requests and lab pages). A real browser checks every
+/// tab at 390 px in `tools/e2e.sh` (`tools/screenshots/fit-phone.mjs`).
+#[test]
+fn wide_tables_scroll_inside_their_box_on_a_phone() {
+    let css = std::fs::read_to_string("static/kernel/dashboard.css").unwrap();
+    assert!(css.contains(".dash .scroll { position: relative; max-width: 100%; }"));
+}
+
 /// The dashboard replaces the host's System and Routes tabs; their pages stay as the fallback.
 #[tokio::test]
 async fn the_dashboard_replaces_the_system_and_routes_tabs() {

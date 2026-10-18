@@ -35,6 +35,9 @@
 
 /* layout */
 .dash { display: flex; flex-direction: column; gap: 1rem; font-variant-numeric: tabular-nums; }
+/* A phone never scrolls sideways: a wide table scrolls inside its .scroll box, which also contains
+   its absolutely positioned visually-hidden labels (else they widen the page from the table's far edge). */
+.dash .scroll { position: relative; max-width: 100%; }
 .defs { position: absolute; width: 0; height: 0; overflow: hidden; }
 .stop-s1 { stop-color: var(--s1); } .stop-s2 { stop-color: var(--s2); } .stop-s3 { stop-color: var(--s3); } .stop-s4 { stop-color: var(--s4); }
 .stop-ok { stop-color: var(--d-ok); } .stop-warn { stop-color: var(--d-warn); } .stop-err { stop-color: var(--d-err); } .stop-idle { stop-color: var(--d-muted); }
