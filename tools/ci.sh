@@ -152,6 +152,27 @@ run_one() {
     cp "$app/../routes.rs.orig" "$app/src/routes.rs"
     [ "$moved" = 0 ] || return 1
   fi
+  # And in an invite-only app (`offrails-gen new --invite` sets DEFAULT_SIGNUP = Signup::Invite):
+  # every test must hold in both sign-up modes (only the tests that pick a mode with
+  # app_with_signup depend on one). Rerun the auth tests that way, then put config.rs back.
+  if [ "$name" = all ] && grep -qF 'pub const DEFAULT_SIGNUP: Signup = Signup::Open;' "$app/src/config.rs"; then
+    cp "$app/src/config.rs" "$app/../config.rs.orig"
+    sed 's/^pub const DEFAULT_SIGNUP: Signup = Signup::Open;$/pub const DEFAULT_SIGNUP: Signup = Signup::Invite;/' "$app/../config.rs.orig" > "$app/src/config.rs"
+    invite_filter='test(/^(auth_|realtime_test::accounts)/)'
+    if grep -qF 'pub const DEFAULT_SIGNUP: Signup = Signup::Invite;' "$app/src/config.rs"; then
+      step "auth tests invite-only (SQLite)" cargo nextest run --no-fail-fast --status-level fail --final-status-level fail -E "$invite_filter"
+      invite=$?
+      if [ "$invite" = 0 ] && [ "$postgres" = 1 ]; then
+        step "auth tests invite-only (Postgres)" env TEST_DATABASE_URL="$pg_url" cargo nextest run --no-fail-fast --status-level fail --final-status-level fail -E "$invite_filter"
+        invite=$?
+      fi
+    else
+      echo "FAIL $name: couldn't make DEFAULT_SIGNUP invite-only in src/config.rs" >&2
+      invite=1
+    fi
+    cp "$app/../config.rs.orig" "$app/src/config.rs"
+    [ "$invite" = 0 ] || return 1
+  fi
   step "offrails-check" sh .offrails/tools/offrails-check || return 1
   step "cargo deny" cargo deny --log-level error check || return 1
   step "cargo audit" cargo audit -q --deny warnings || return 1
