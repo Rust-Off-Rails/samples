@@ -1176,9 +1176,21 @@ fn every_session_ending_path_calls_sessions_ended() {
         "sessions_ended(s,",
         "sessions_ended(state,",
     ];
+    // Every controller file, subfolders included (an app may group them: controllers/admin/…).
+    fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                rust_files(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    rust_files(std::path::Path::new("src/controllers"), &mut files);
     let mut checked = 0;
-    for entry in std::fs::read_dir("src/controllers").unwrap() {
-        let path = entry.unwrap().path();
+    for path in files {
         let src = std::fs::read_to_string(&path).unwrap();
         for f in src
             .split("\nasync fn ")

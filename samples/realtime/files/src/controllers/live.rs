@@ -266,7 +266,7 @@ pub async fn sign_out(
 
 /// Deletes the session, then wakes the person's connections (each re-checks its own session).
 pub async fn end_session(s: &AppState, signed: &Signed) -> Result<(), AppError> {
-    guest_session::destroy(&s.db, signed.session_id).await?;
+    guest_session::destroy(&s.db, signed.session_id).await?; // unscoped: the actor's own session
     crate::channels::session_ended(s, signed.person.id);
     Ok(())
 }
