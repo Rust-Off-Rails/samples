@@ -26,7 +26,7 @@ use super::hist::Hist;
 use super::insights::{Finding, Severity};
 use super::trace::Trace;
 use super::waterfall;
-use super::web::{Dash, Mode, chrome, dash, micros};
+use super::web::{Dash, Mode, chrome, count, dash, micros};
 use super::{HUB, ai, lock};
 use crate::kernel::flash::RequestFlash;
 use crate::kernel::outbound::{CallRecord, Outcome};
@@ -319,8 +319,13 @@ pub const SEQUENTIAL_GAP_US: u64 = 5_000;
 /// The run of sequential outbound calls with the largest saving in a trace's tree.
 pub fn sequential(root: &waterfall::Node) -> Option<Sequential> {
     fn walk(n: &waterfall::Node, best: &mut Option<Sequential>) {
+        // INVARIANT: the attempts of one call are sequential by nature (a retry waits for the
+        // failure before it): a call's own rows are never a run (test: retry_attempts_are_not_sequential_calls).
+        if n.kind == "http" {
+            return;
+        }
         let mut calls: Vec<(String, u64, u64)> = Vec::new();
-        for c in n.children.iter().filter(|c| c.kind == "http") {
+        for c in n.children.iter().filter(|c| c.kind == "http" && !c.attempt) {
             if c.group {
                 for (s, d) in &c.occ {
                     calls.push((c.short.clone(), *s, *d));
@@ -388,10 +393,13 @@ pub fn sequential(root: &waterfall::Node) -> Option<Sequential> {
 /// Outbound calls in a trace that overlapped (ran concurrently): how many, at most at once.
 pub fn concurrent(root: &waterfall::Node) -> usize {
     fn walk(n: &waterfall::Node, best: &mut usize) {
+        if n.kind == "http" {
+            return;
+        }
         let calls: Vec<(u64, u64)> = n
             .children
             .iter()
-            .filter(|c| c.kind == "http" && !c.group)
+            .filter(|c| c.kind == "http" && !c.group && !c.attempt)
             .map(|c| (c.start_us, c.start_us + c.dur_us))
             .collect();
         for (s, _) in &calls {
@@ -719,20 +727,25 @@ pub fn dep_map(list: &[&Upstream], base: &str) -> DepMap {
                     width: format!("{w:.1}"),
                     class: u.health(),
                     title: format!(
-                        "{} {} → {} {} {}: {} calls",
-                        c.method, c.route, u.service, u.method, u.route, c.calls
+                        "{} {} → {} {} {}: {}",
+                        c.method,
+                        c.route,
+                        u.service,
+                        u.method,
+                        u.route,
+                        count(c.calls, "call", "calls")
                     ),
                 });
                 lines.push(format!(
-                    "{} {} → {} {} {}: {} calls, p95 {}, {} errors ({})",
+                    "{} {} → {} {} {}: {}, p95 {}, {} ({})",
                     c.method,
                     c.route,
                     u.service,
                     u.method,
                     u.route,
-                    c.calls,
+                    count(c.calls, "call", "calls"),
                     micros(u.hist.quantile(0.95)),
-                    u.errors,
+                    count(u.errors, "error", "errors"),
                     match u.health() {
                         "err" => "failing or very slow",
                         "warn" => "slow or flaky",
@@ -748,10 +761,10 @@ pub fn dep_map(list: &[&Upstream], base: &str) -> DepMap {
                 ty: format!("{:.1}", y2 - 2.0),
                 label: ui::truncate(&format!("{} {} {}", u.service, u.method, u.route), 36),
                 sub: format!(
-                    "{} · p95 {} · {} calls",
+                    "{} · p95 {} · {}",
                     ui::truncate(&u.host, 22),
                     micros(u.hist.quantile(0.95)),
-                    u.calls
+                    count(u.calls, "call", "calls")
                 ),
                 href: format!(
                     "{base}/traces?upstream={}",

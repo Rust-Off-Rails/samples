@@ -33,6 +33,11 @@ pub const CALLS_PER_TRACE: u32 = 25;
 pub const GROWTH_MIN_US: u64 = 20_000;
 /// A function of the app's own with at least this share of CPU samples (self) is hot. APP.
 pub const HOT_CPU_SHARE: f64 = 0.20;
+/// A request that waited this long before its code ran, for at least `WAIT_SHARE` percent of its
+/// time, waited in a queue; `WAIT_MIN_TRACES` of them make a finding. APP.
+pub const WAIT_US: u64 = 100_000;
+pub const WAIT_SHARE: u64 = 25;
+pub const WAIT_MIN_TRACES: usize = 3;
 /// EXPLAINs per refresh, at most (each is cached for a minute).
 const EXPLAIN_BUDGET: usize = 20;
 /// CSP reports kept.
@@ -245,6 +250,7 @@ pub async fn findings(state: &AppState) -> Vec<Finding> {
     {
         let traces = lock(&HUB.traces).list(false);
         out.extend(super::upstreams::findings(&traces));
+        out.extend(queue_waits(&traces));
     }
     out.extend(super::threats::findings());
     out.extend(super::rum::findings());
@@ -505,6 +511,48 @@ pub fn slow_functions(
         }
     }
     out
+}
+
+/// Requests that waited before their code ran (the waterfall's `wait` rows): the server is
+/// saturated (every worker busy, a concurrency limit, a connection to wait for).
+pub fn queue_waits(traces: &[std::sync::Arc<super::trace::Trace>]) -> Vec<Finding> {
+    let mut hits: Vec<(u64, u64, &'static str, &'static str, u64)> = Vec::new();
+    for t in traces.iter().filter(|t| t.kind == "request").take(300) {
+        let waited = super::waterfall::waited_us(&super::waterfall::tree(t, false));
+        if waited >= WAIT_US && waited * 100 >= t.dur_us.max(1) * WAIT_SHARE {
+            hits.push((waited, t.id, t.method, t.route, t.dur_us));
+        }
+    }
+    if hits.len() < WAIT_MIN_TRACES {
+        return Vec::new();
+    }
+    hits.sort_by_key(|h| std::cmp::Reverse(h.0));
+    let (worst, trace, _, _, dur) = hits[0];
+    let mut routes: Vec<String> = hits.iter().map(|h| format!("{} {}", h.2, h.3)).collect();
+    routes.sort();
+    routes.dedup();
+    vec![Finding {
+        key: "queue-wait".into(),
+        kind: "saturation",
+        severity: if worst >= 5 * WAIT_US { Severity::High } else { Severity::Medium },
+        score: worst / 1000 * hits.len() as u64,
+        title: format!(
+            "Requests waited up to {} before running: the server is saturated",
+            micros(worst)
+        ),
+        evidence: format!(
+            "{} waited at least {} before any of their code ran ({:.0}% of the worst one's {}), on {}",
+            super::web::count(hits.len(), "request", "requests"),
+            micros(WAIT_US),
+            worst as f64 * 100.0 / dur.max(1) as f64,
+            micros(dur),
+            routes.into_iter().take(4).collect::<Vec<_>>().join(", ")
+        ),
+        fix: "Look at Tokio busy and the database pool on Charts at those minutes: busy workers mean blocking work on the runtime (move it to spawn_blocking) or too few cores; a full pool means slow or long-held connections (raise DATABASE_POOL, shorten transactions); otherwise a concurrency limit is queueing them.".into(),
+        guide: ".offrails/guides/database.md#kerneldbrs-spec",
+        guide_url: "https://rustoffrails.org/docs/guides/database",
+        href: format!("/dev/dashboard/traces/{trace}"),
+    }]
 }
 
 /// Least-squares slope of (t, v), per second.

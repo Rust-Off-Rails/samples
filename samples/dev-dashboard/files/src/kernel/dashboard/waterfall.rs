@@ -31,8 +31,9 @@ pub const GROUP_MIN: usize = 3;
 pub const MAX_ROWS: usize = 1_500;
 
 /// What a row is, for its color and the legend.
-pub const KINDS: [(&str, &str); 10] = [
+pub const KINDS: [(&str, &str); 11] = [
     ("request", "request"),
+    ("wait", "waiting (queue)"),
     ("handler", "handler"),
     ("method", "method"),
     ("sql", "SQL"),
@@ -113,6 +114,8 @@ pub struct Node {
     pub short: String,
     /// Outbound HTTP: the call (or an attempt) timed out.
     pub timeout: bool,
+    /// Outbound HTTP: one try of a call that retries (`http_attempt`), not a call of its own.
+    pub attempt: bool,
     span_id: Option<u64>,
 }
 
@@ -141,6 +144,7 @@ impl Node {
             host: String::new(),
             short: String::new(),
             timeout: false,
+            attempt: false,
             span_id: None,
         }
     }
@@ -153,7 +157,7 @@ impl Node {
     fn key(&self) -> Option<String> {
         match (self.kind, self.fp) {
             (_, Some(fp)) => Some(format!("sql:{fp}")),
-            ("event" | "framework", _) => None,
+            ("event" | "framework" | "wait", _) => None,
             _ if self.group => None,
             _ => Some(format!("span:{}:{}", self.label, self.module)),
         }
@@ -251,6 +255,9 @@ pub fn tree(t: &Trace, details: bool) -> Node {
     root.children = root_kids;
     sort_rec(&mut root);
     fold_framework(&mut root);
+    if t.kind == "request" {
+        mark_waiting(&mut root);
+    }
     fold_repeats(&mut root);
     account(&mut root);
     mark_critical(&mut root);
@@ -294,6 +301,7 @@ fn outbound_label(n: &mut Node, name: &str, fields: &str) {
     if name == "http_attempt" {
         n.label = format!("attempt {}{arrow}", field(fields, "attempt").unwrap_or("?"));
         n.short = "attempt".to_owned();
+        n.attempt = true;
         return;
     }
     let service = field(fields, "service");
@@ -386,6 +394,66 @@ fn fold_framework(root: &mut Node) {
 
 fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
+}
+
+/// A stretch of waiting shorter than this (or than 2% of the request) isn't drawn: scheduling
+/// noise. APP.
+pub const WAIT_ROW_US: u64 = 5_000;
+
+/// The time a request spent before any of the app's code ran, outside the framework's own
+/// checks: from its arrival at the outermost layer (the dashboard's middleware) to the first
+/// handler, method, statement or call. Under load that is waiting for a worker, a semaphore or a
+/// connection, not missing instrumentation, so it gets its own kind (`wait`), its own color and its
+/// own share in the time-by-kind bar.
+fn mark_waiting(root: &mut Node) {
+    let Some(first) = root
+        .children
+        .iter()
+        .filter(|c| c.kind != "framework")
+        .map(|c| c.start_us)
+        .min()
+    else {
+        return;
+    };
+    let mut busy: Vec<(u64, u64)> = root
+        .children
+        .iter()
+        .filter(|c| c.kind == "framework")
+        .flat_map(|c| c.occ.iter().map(|(s, d)| (*s, s + d)))
+        .collect();
+    busy.sort_unstable();
+    let mut cursor = 0;
+    let mut gaps = Vec::new();
+    for (s, e) in busy {
+        if s >= first {
+            break;
+        }
+        if s > cursor {
+            gaps.push((cursor, s - cursor));
+        }
+        cursor = cursor.max(e);
+    }
+    if first > cursor {
+        gaps.push((cursor, first - cursor));
+    }
+    let floor = WAIT_ROW_US.max(root.dur_us / 50);
+    for (s, d) in gaps.into_iter().filter(|(_, d)| *d >= floor) {
+        let mut n = Node::leaf("wait", "waiting to run".to_owned(), s, d);
+        n.module = "before the handler: a free worker, a permit, a connection".to_owned();
+        n.full = "The request had arrived (the outermost layer saw it) but none of the app's code                   ran yet. Under load this is queueing: every Tokio worker busy, a concurrency                   limit, or a layer waiting for a database connection. Compare with Tokio busy                   and the pool on Charts."
+            .to_owned();
+        root.children.push(n);
+    }
+    sort_rec(root);
+}
+
+/// How long a request waited before its code ran (the `wait` rows of its tree).
+pub fn waited_us(root: &Node) -> u64 {
+    root.children
+        .iter()
+        .filter(|c| c.kind == "wait")
+        .map(|c| c.total_us)
+        .sum()
 }
 
 /// Siblings with the same key, `GROUP_MIN` or more, become one group row (recursively).

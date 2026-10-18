@@ -115,6 +115,9 @@ The optional **Ask AI** agent is the one feature that sends data off the machine
 | The attack simulator, through the router, lights up the detectors; the Security tab, Insights and the AI tools show them with evidence | `the_attack_simulator_lights_up_every_detector` |
 | Rage clicks, dead clicks after a boosted navigation, JS errors after one and poor Web Vitals become insights linked to traces; the Frontend tab and the AI tool list them | `frontend_signals_become_insights`, `selectors_pages_and_messages_are_cleaned` |
 | The UX lab plants each problem, including the boosted-navigation dead widget; the lab sign-in form throttles like an auth sample | `the_ux_lab_and_the_lab_sign_in_behave` |
+| A call's retry attempts are never reported as calls that could run concurrently | `retry_attempts_are_not_sequential_calls` |
+| The time a request waited before its code ran is a `wait` row and share in the waterfall, and requests that waited long become a saturation insight | `queue_time_is_its_own_kind_and_an_insight` |
+| Counts read right on every page ("1 error", "2 errors") | `counts_are_pluralized` |
 | Answers render `*emphasis*` without its markers; a briefing line cut short never leaves a code span or a citation open; a COUNT over a subquery reads `COUNT lab_orders` | `emphasis_renders_without_its_markers_and_cuts_keep_code_closed`, `sql_labels_handle_counts_over_subqueries` |
 
 ## In a browser (not part of the test suite)

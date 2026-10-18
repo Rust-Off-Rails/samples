@@ -33,7 +33,7 @@
     </form>
   </section>
   <section class="panel" aria-labelledby="lab-data">
-    <header><h2 id="lab-data">Fake data</h2><span class="muted">{{ records }} orders</span></header>
+    <header><h2 id="lab-data">Fake data</h2><span class="muted">{{ crate::kernel::dashboard::web::count(records, "order", "orders") }}</span></header>
     <form method="post" action="/dev/dashboard/lab/seed" class="row pad">
       <label>Orders to add <input type="number" name="n" min="1" max="10000" value="200" required></label>
       <button class="btn">Add</button>

@@ -1094,13 +1094,13 @@ pub fn list_text() -> String {
     for c in r.clicks().iter().take(15) {
         let _ = writeln!(
             out,
-            "- {} clicks on `{}` on {} ([route:GET {}]): {} report(s), {} click(s), {} after a boosted navigation{}",
+            "- {} clicks on `{}` on {} ([route:GET {}]): {}, {}, {} after a boosted navigation{}",
             c.kind,
             c.sel,
             c.page,
             c.route,
-            c.count,
-            c.clicks,
+            super::web::count(c.count, "report", "reports"),
+            super::web::count(c.clicks, "click", "clicks"),
             c.boosted,
             if c.message.is_empty() {
                 String::new()

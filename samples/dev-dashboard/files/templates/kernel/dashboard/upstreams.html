@@ -27,7 +27,7 @@
 </section>
 {% endif %}
 <section class="panel" aria-labelledby="up-table-title">
-  <header><h2 id="up-table-title">Upstreams</h2>{% if dropped > 0 %}<span class="muted">{{ dropped }} calls to further upstreams counted, not kept</span>{% endif %}</header>
+  <header><h2 id="up-table-title">Upstreams</h2>{% if dropped > 0 %}<span class="muted">{{ crate::kernel::dashboard::web::count(dropped, "call", "calls") }} to further upstreams counted, not kept</span>{% endif %}</header>
   <div class="scroll" tabindex="0" role="region" aria-label="Upstreams table"><table class="data-table up-table">
     <caption class="visually-hidden">Each upstream with its calls, latency percentiles against its SLO, error and timeout rates, retries, timeout, callers and trend</caption>
     <thead><tr><th scope="col">Upstream</th><th scope="col" class="num">Calls</th><th scope="col" class="num">p50</th><th scope="col" class="num">p95</th><th scope="col" class="num">p99</th><th scope="col" class="num">Errors</th><th scope="col" class="num">Timeouts</th><th scope="col" class="num">Retries</th><th scope="col" class="num">Timeout</th><th scope="col">Called by</th><th scope="col">Last 30 min</th></tr></thead>

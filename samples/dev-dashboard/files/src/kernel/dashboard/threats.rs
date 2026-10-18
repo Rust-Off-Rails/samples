@@ -1154,9 +1154,9 @@ impl Threats {
                         Severity::High
                     },
                     format!(
-                        "Scanner from {ip}: {} probe{}, {n404} 404s{}",
-                        probes,
-                        if probes == 1 { "" } else { "s" },
+                        "Scanner from {ip}: {}, {}{}",
+                        super::web::count(probes, "probe", "probes"),
+                        super::web::count(n404, "404", "404s"),
                         scanner_name.map(|n| format!(" ({n})")).unwrap_or_default()
                     ),
                     *hash,
@@ -1171,8 +1171,8 @@ impl Threats {
                         "every probe got a 404, so nothing it looked for exists here".to_owned()
                     } else {
                         format!(
-                            "{} probe path(s) answered below 400: {}",
-                            exposed.len(),
+                            "{} answered below 400: {}",
+                            super::web::count(exposed.len(), "probe path", "probe paths"),
                             exposed
                                 .iter()
                                 .map(|e| e.path.clone())
@@ -1213,7 +1213,8 @@ impl Threats {
                     );
                     f.count = n;
                     f.detail = format!(
-                        "{n} request(s) carried {} patterns in the path or query string (kept as the pattern only; the query string itself is never stored); {answered} got a 2xx or 3xx, most likely a page that ignored the parameter (check that it did).",
+                        "{} carried {} patterns in the path or query string (kept as the pattern only; the query string itself is never stored); {answered} got a 2xx or 3xx, most likely a page that ignored the parameter (check that it did).",
+                        super::web::count(n, "request", "requests"),
                         label.to_ascii_lowercase()
                     );
                     f.action = match kind {

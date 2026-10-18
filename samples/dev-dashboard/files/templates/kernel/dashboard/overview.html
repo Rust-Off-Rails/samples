@@ -17,7 +17,7 @@
 
 {% if !d.ro && finding_total > 0 %}
 <section class="panel" aria-labelledby="ov-insights">
-  <header><h2 id="ov-insights">Insights</h2><a href="/dev/dashboard/insights">All {{ finding_total }} findings</a></header>
+  <header><h2 id="ov-insights">Insights</h2><a href="/dev/dashboard/insights">All {{ crate::kernel::dashboard::web::count(finding_total, "finding", "findings") }}</a></header>
   <ul class="findings compact" role="list">
     {% for f in findings %}
     <li class="finding sev-{{ f.severity }}"><span class="badge sev">{{ f.severity }}</span> <a href="{{ f.href }}">{{ f.title }}</a> <span class="muted">{{ f.evidence }}</span></li>

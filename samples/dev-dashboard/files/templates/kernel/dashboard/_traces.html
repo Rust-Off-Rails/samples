@@ -10,7 +10,7 @@
   </svg>
   <figcaption class="tx-xticks" aria-hidden="true">{% for (_, l) in scatter.xticks %}<span>{{ l }}</span>{% endfor %}</figcaption>
 </figure>
-<p class="visually-hidden">{{ count }} traces, newest first.</p>
+<p class="visually-hidden">{{ crate::kernel::dashboard::web::count(count, "trace", "traces") }}, newest first.</p>
 <ol class="tx-list" aria-label="Traces, newest first">
   {% for t in rows %}
   <li class="tx" id="tx-{{ t.id }}">

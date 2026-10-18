@@ -18,7 +18,7 @@
   </section>
   {% for n in w.n_plus_one %}
   <div class="callout warn wf-n1" role="note">
-    <p><strong>N+1:</strong> <code class="mono">{{ n.summary }}</code> ran <strong>{{ n.count }}×</strong> in this {% if w.kind == "request" %}request{% else %}{{ w.kind }}{% endif %}. {% if !n.row.is_empty() %}<a href="#{{ n.row }}" data-wf-reveal="{{ n.row }}">Show the {{ n.count }} queries</a> · {% endif %}<a href="{{ w.base }}/sql/{{ n.fp }}">its SQL page</a></p>
+    <p><strong>N+1:</strong> <code class="mono">{{ n.summary }}</code> ran <strong>{{ n.count }}×</strong> in this {% if w.kind == "request" %}request{% else %}{{ w.kind }}{% endif %}. {% if !n.row.is_empty() %}<a href="#{{ n.row }}" data-wf-reveal="{{ n.row }}">Show the {{ crate::kernel::dashboard::web::count(n.count, "query", "queries") }}</a> · {% endif %}<a href="{{ w.base }}/sql/{{ n.fp }}">its SQL page</a></p>
     <details class="wf-fix"><summary>Suggested fix</summary>
 <pre class="code"><code>// One query for every parent instead of one per parent:
 let ids: Vec&lt;i64&gt; = parents.iter().map(|p| p.id).collect();
@@ -77,14 +77,14 @@ let (stock, price, rates) = tokio::join!(
     </div>
     <aside class="wf-panel" data-wf-panel hidden aria-label="Details" tabindex="-1"></aside>
   </div>
-  {% if w.cut > 0 || w.dropped > 0 %}<p class="hint wf-trunc" role="note">Truncated: {% if w.dropped > 0 %}{{ w.dropped }} spans, statements or events past the per-trace caps weren't kept{% if w.cut > 0 %}; {% endif %}{% endif %}{% if w.cut > 0 %}{{ w.cut }} rows not drawn{% endif %}.</p>{% endif %}
+  {% if w.cut > 0 || w.dropped > 0 %}<p class="hint wf-trunc" role="note">Truncated: {% if w.dropped > 0 %}{{ w.dropped }} spans, statements or events past the per-trace caps weren't kept{% if w.cut > 0 %}; {% endif %}{% endif %}{% if w.cut > 0 %}{{ crate::kernel::dashboard::web::count(w.cut, "row", "rows") }} not drawn{% endif %}.</p>{% endif %}
   {% for r in w.rows %}
   <template id="{{ r.id }}-d">
     <header><span class="sw k-{{ r.kind }}" aria-hidden="true"></span><h3>{{ r.label }}</h3><button type="button" class="btn quiet wf-close" data-wf-close aria-label="Close details">×</button></header>
     <dl class="kv">
       <dt>Kind</dt><dd>{{ r.kind }}{% if r.critical %} · on the critical path{% endif %}</dd>
       <dt>Starts</dt><dd>{{ r.start }}</dd>
-      <dt>Duration</dt><dd>{{ r.dur }}{% if r.group %} span · {{ r.total }} total in {{ r.count }} runs{% else if r.has_children %} · self {{ r.selft }}{% endif %}</dd>
+      <dt>Duration</dt><dd>{{ r.dur }}{% if r.group %} span · {{ r.total }} total in {{ crate::kernel::dashboard::web::count(r.count, "run", "runs") }}{% else if r.has_children %} · self {{ r.selft }}{% endif %}</dd>
       {% if !r.host.is_empty() %}<dt>Host</dt><dd class="mono">{{ r.host }}</dd>{% endif %}
       {% if !r.module.is_empty() %}<dt>Module</dt><dd class="mono">{{ r.module }}</dd>{% endif %}
       {% if !r.loc.is_empty() %}<dt>Source</dt><dd class="mono">{{ r.loc }}</dd>{% endif %}

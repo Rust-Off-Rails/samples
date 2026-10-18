@@ -51,6 +51,13 @@ pub fn micros(us: u64) -> String {
     }
 }
 
+/// "1 error", "2 errors", "0 errors": a count and its noun, singular only for exactly one.
+pub fn count(n: impl std::fmt::Display, one: &str, many: &str) -> String {
+    let n = n.to_string();
+    let noun = if n == "1" { one } else { many };
+    format!("{n} {noun}")
+}
+
 /// "512 B", "1.5 KB", "210.4 MB", "2.1 GB".
 pub fn bytes(n: u64) -> String {
     const K: f64 = 1024.0;

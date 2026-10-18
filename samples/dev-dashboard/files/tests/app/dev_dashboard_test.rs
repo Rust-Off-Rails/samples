@@ -4898,7 +4898,9 @@ async fn a_trace_expands_inline_with_repeats_folded() {
     );
     let tree = waterfall::tree(&t, true);
     let handler = &tree.children.iter().find(|c| c.kind == "handler").unwrap();
-    assert!(tree.children[0].kind == "framework" && tree.children[0].group);
+    // The framework's checks fold into one row, first (after any time the request waited).
+    let first = tree.children.iter().find(|c| c.kind != "wait").unwrap();
+    assert!(first.kind == "framework" && first.group);
     fn find<'a>(n: &'a waterfall::Node, label: &str) -> Option<&'a waterfall::Node> {
         if n.label == label {
             return Some(n);

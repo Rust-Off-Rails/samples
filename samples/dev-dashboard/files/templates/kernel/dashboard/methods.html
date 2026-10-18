@@ -9,7 +9,7 @@
   <input type="hidden" name="route" value="{{ route }}">
   <span class="tx-actions"><button type="submit" class="btn" data-tx-apply>Apply</button></span>
 </form>
-<p class="hint">Every span in the {{ traces }} traces in memory, aggregated: <code>#[tracing::instrument]</code> functions, <code>info_span!</code> blocks, handlers and renders. Self time is a span minus what it called; a span with lots of self time and no children is where to add one (or where the CPU went: <a href="{{ base }}/profile">hot functions</a>). Click a method for the traces that ran it.</p>
+<p class="hint">Every span in the {{ crate::kernel::dashboard::web::count(traces, "trace", "traces") }} in memory, aggregated: <code>#[tracing::instrument]</code> functions, <code>info_span!</code> blocks, handlers and renders. Self time is a span minus what it called; a span with lots of self time and no children is where to add one (or where the CPU went: <a href="{{ base }}/profile">hot functions</a>). Click a method for the traces that ran it.</p>
 {% if rows.is_empty() %}
 <p class="empty">No spans yet. Instrument a function with <code>#[tracing::instrument(skip_all)]</code> (README "Instrumenting your own methods"), then use the app.</p>
 {% else %}

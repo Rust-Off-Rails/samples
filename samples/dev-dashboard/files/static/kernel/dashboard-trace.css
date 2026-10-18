@@ -15,6 +15,7 @@
   --k-framework: light-dark(#a8a29e, #78716c);
   --k-event: light-dark(#b45309, #fcd34d);
   --k-other: light-dark(#d6d3d1, #57534e);
+  --k-wait: light-dark(#a16207, #facc15);
   --wf-warn: light-dark(#d97706, #fbbf24);
   --wf-err: light-dark(#dc2626, #f87171);
   --wf-crit: light-dark(#1c1917, #fafaf9);
@@ -25,7 +26,7 @@
 .k-request { --k: var(--k-request); } .k-handler { --k: var(--k-handler); } .k-method { --k: var(--k-method); }
 .k-sql { --k: var(--k-sql); } .k-template { --k: var(--k-template); } .k-job { --k: var(--k-job); }
 .k-http { --k: var(--k-http); } .k-middleware { --k: var(--k-middleware); } .k-framework { --k: var(--k-framework); }
-.k-event { --k: var(--k-event); } .k-other { --k: var(--k-other); }
+.k-event { --k: var(--k-event); } .k-other { --k: var(--k-other); } .k-wait { --k: var(--k-wait); }
 .sw { display: inline-block; width: .65rem; height: .65rem; border-radius: 3px; background: var(--k, var(--k-other)); flex: none; vertical-align: middle; }
 .sw.gap { background: repeating-linear-gradient(45deg, var(--k-other) 0 2px, transparent 2px 5px); border: 1px solid var(--k-other); }
 .defs { position: absolute; width: 0; height: 0; overflow: hidden; }
@@ -93,6 +94,7 @@
 .wf-track .tick { stroke: var(--d-grid); }
 .wf-track .bar { fill: var(--k); }
 .k-request .wf-track .bar { opacity: .55; }
+.k-wait .wf-track .bar { fill-opacity: .45; stroke: var(--k); stroke-dasharray: 2 2; }
 .grp .wf-track .bar { opacity: .9; }
 .flagged .wf-track .bar { fill: var(--wf-warn); }
 .failed .wf-track .bar { fill: var(--wf-err); }

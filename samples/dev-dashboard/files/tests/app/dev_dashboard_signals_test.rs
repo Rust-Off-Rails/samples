@@ -556,12 +556,15 @@ async fn the_attack_simulator_lights_up_every_detector() {
     }
     assert!(lab::attack_plan("nope").is_none());
     let router = offrails_host::routes::router(app.state.clone()).unwrap();
+    // WHY judged as of the run's start: on a loaded machine the run can outlast the detectors'
+    // window, and its first requests would have aged out.
+    let started = chrono::Utc::now().timestamp();
     lab::run_attack(
         lab::Target::InProcess(router),
         lab::attack_plan("all").unwrap(),
     )
     .await;
-    let now = chrono::Utc::now().timestamp();
+    let now = started + 60;
     let found = kinds(&lock(&HUB.threats), now);
     for kind in [
         "scanner",
@@ -1116,4 +1119,202 @@ fn sql_labels_handle_counts_over_subqueries() {
         ),
         "SELECT lab_orders WHERE id = ?"
     );
+}
+
+fn span(
+    id: u64,
+    parent: Option<u64>,
+    name: &'static str,
+    start_us: u64,
+    dur_us: u64,
+    fields: &str,
+) -> offrails_host::kernel::dashboard::trace::SpanRec {
+    offrails_host::kernel::dashboard::trace::SpanRec {
+        id,
+        parent,
+        name,
+        target: "offrails_host::kernel::outbound",
+        file: None,
+        line: None,
+        start_us,
+        dur_us,
+        fields: fields.to_owned(),
+    }
+}
+
+fn request(
+    id: u64,
+    dur_us: u64,
+    spans: Vec<offrails_host::kernel::dashboard::trace::SpanRec>,
+) -> Arc<offrails_host::kernel::dashboard::trace::Trace> {
+    Arc::new(offrails_host::kernel::dashboard::trace::Trace {
+        id,
+        at: chrono::Utc::now(),
+        kind: "request",
+        from_disk: false,
+        method: "GET",
+        route: "/dev/lab/checkout",
+        path: "/dev/lab/checkout".into(),
+        status: 200,
+        dur_us,
+        bytes: None,
+        request_id: format!("req-{id}"),
+        spans,
+        sql: Vec::new(),
+        events: Vec::new(),
+        n_plus_one: Vec::new(),
+        statements: 0,
+        sql_us: 0,
+        dropped: 0,
+    })
+}
+
+/// A call's retries run one after another by nature: its attempts are never a "sequential calls"
+/// run, while two separate calls one after another still are.
+#[test]
+fn retry_attempts_are_not_sequential_calls() {
+    let call = "service=\"shipping\" http.method=\"POST\" http.host=api.example.com http.route=/rates attempts=2";
+    let retried = request(
+        1,
+        600_000,
+        vec![
+            span(1, None, "handler", 0, 590_000, "handler=\"lab::checkout\""),
+            span(2, Some(1), "http", 1_000, 500_000, call),
+            span(
+                3,
+                Some(2),
+                "http_attempt",
+                1_000,
+                250_000,
+                "attempt=1 outcome=\"timeout\"",
+            ),
+            span(
+                4,
+                Some(2),
+                "http_attempt",
+                251_000,
+                249_000,
+                "attempt=2 http.status=200 outcome=\"ok\"",
+            ),
+        ],
+    );
+    let root = waterfall::tree(&retried, true);
+    assert!(
+        upstreams::sequential(&root).is_none(),
+        "{:?}",
+        upstreams::sequential(&root)
+    );
+    assert_eq!(upstreams::concurrent(&root), 1);
+    // Two calls of their own, one after another: still flagged.
+    let two = request(
+        2,
+        600_000,
+        vec![
+            span(1, None, "handler", 0, 590_000, "handler=\"lab::checkout\""),
+            span(2, Some(1), "http", 1_000, 250_000, call),
+            span(
+                5,
+                Some(1),
+                "http",
+                252_000,
+                240_000,
+                "service=\"payments\" http.method=\"POST\" http.host=api.example.com http.route=/charge",
+            ),
+        ],
+    );
+    let s = upstreams::sequential(&waterfall::tree(&two, true)).unwrap();
+    assert_eq!(s.calls.len(), 2);
+}
+
+/// The time between a request's arrival and its first code is a `wait` row and its own share of
+/// the time-by-kind bar; several requests that waited long become a saturation insight.
+#[tokio::test]
+async fn queue_time_is_its_own_kind_and_an_insight() {
+    let app = dev_app().await;
+    let waited = |id| {
+        request(
+            id,
+            1_000_000,
+            vec![span(
+                1,
+                None,
+                "handler",
+                700_000,
+                290_000,
+                "handler=\"lab::checkout\"",
+            )],
+        )
+    };
+    let t = waited(10);
+    let root = waterfall::tree(&t, true);
+    assert_eq!(waterfall::waited_us(&root), 700_000);
+    let split = waterfall::time_by_kind(&root);
+    assert_eq!(split[0], ("wait", 700_000), "{split:?}");
+    let view = waterfall::view(
+        &t,
+        true,
+        "/dev/dashboard",
+        false,
+        true,
+        false,
+        String::new(),
+    );
+    assert!(
+        view.rows
+            .iter()
+            .any(|r| r.kind == "wait" && r.label == "waiting to run")
+    );
+    assert!(
+        view.split
+            .iter()
+            .any(|(k, label, ..)| *k == "wait" && *label == "waiting (queue)")
+    );
+    // A request that started at once has no wait row.
+    let quick = request(
+        11,
+        300_000,
+        vec![span(1, None, "handler", 200, 290_000, "")],
+    );
+    assert_eq!(waterfall::waited_us(&waterfall::tree(&quick, true)), 0);
+    for id in 20..23 {
+        lock(&HUB.traces).push(waited(id));
+    }
+    let found = insights::findings(&app.state).await;
+    let f = found
+        .iter()
+        .find(|f| f.kind == "saturation")
+        .unwrap_or_else(|| panic!("{:?}", found.iter().map(|f| &f.title).collect::<Vec<_>>()));
+    assert!(
+        f.title
+            .starts_with("Requests waited up to 700ms before running"),
+        "{}",
+        f.title
+    );
+    assert!(
+        f.evidence.starts_with("3 requests waited"),
+        "{}",
+        f.evidence
+    );
+}
+
+/// Counts read right: "1 error", "2 errors", "0 errors", on the Frontend tab's badges too.
+#[tokio::test]
+async fn counts_are_pluralized() {
+    use offrails_host::kernel::dashboard::web::count;
+    assert_eq!(count(1, "error", "errors"), "1 error");
+    assert_eq!(count(2_u64, "error", "errors"), "2 errors");
+    assert_eq!(count(0_usize, "error", "errors"), "0 errors");
+    let app = dev_app().await;
+    let body =
+        json!({ "v": 1, "page": "/", "events": [{ "t": "js_error", "msg": "boom" }] }).to_string();
+    assert_eq!(
+        post_rum(&app, rum::DEV_ENDPOINT, &body, SAME).await,
+        StatusCode::NO_CONTENT
+    );
+    app.get("/dev/dashboard/frontend")
+        .await
+        .assert_ok()
+        .assert_contains(">1 error<")
+        .assert_contains(">0 rage clicks<")
+        .assert_not_contains("1 errors");
 }

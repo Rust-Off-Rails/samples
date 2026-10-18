@@ -12,8 +12,8 @@
     <div class="ai-prompts" role="group" aria-label="Suggested questions">{% for s in p.suggestions %}<button type="button" class="chip" data-ai-prompt>{{ s }}</button>{% endfor %}</div>
     <label class="ai-label" for="ai-q-{{ p.tab }}">Your question <span class="muted">({{ p.tab_label }}{% if !p.item_title.is_empty() %}: {{ p.item_title }}{% endif %})</span></label>
     <textarea id="ai-q-{{ p.tab }}" name="question" rows="3" maxlength="2000" required data-ai-question>{{ p.question }}</textarea>
-    <details class="ai-preview"><summary>Preview what will be sent first <span class="muted">({{ p.chars }} characters, about {{ p.tokens }} tokens, to {{ p.provider }} · {{ p.model }})</span></summary>
-      <p class="hint">POST <code>{{ p.endpoint }}</code>. The agent may then call these read-only tools, up to {{ p.max_steps }} calls; each call and its result shows as it happens and stays in the history.</p>
+    <details class="ai-preview"><summary>Preview what will be sent first <span class="muted">({{ crate::kernel::dashboard::web::count(p.chars, "character", "characters") }}, about {{ crate::kernel::dashboard::web::count(p.tokens, "token", "tokens") }}, to {{ p.provider }} · {{ p.model }})</span></summary>
+      <p class="hint">POST <code>{{ p.endpoint }}</code>. The agent may then call these read-only tools, up to {{ crate::kernel::dashboard::web::count(p.max_steps, "call", "calls") }}; each call and its result shows as it happens and stays in the history.</p>
       <p class="ai-toolnames">{% for t in p.tools %}<code title="{{ t.1 }}">{{ t.0 }}</code> {% endfor %}</p>
       <pre class="code" tabindex="0" aria-label="Headers">{% for h in p.headers %}{{ h }}
 {% endfor %}</pre>

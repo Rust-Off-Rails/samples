@@ -17,14 +17,14 @@
   <nav class="segmented" aria-label="Window">{% for w in windows %}<a href="{{ w.href }}"{% if w.current %} aria-current="true"{% endif %}>{{ w.label }}</a>{% endfor %}</nav>
   <nav class="segmented" aria-label="Whose code">{% for f in filters %}<a href="{{ f.href }}"{% if f.current %} aria-current="true"{% endif %}>{{ f.label }}</a>{% endfor %}</nav>
 </div>
-<p class="hint">Which functions the CPU was in, with no annotations: {{ samples }} samples. <strong>Self</strong>: the function itself was running; <strong>total</strong>: it was on the stack. Time spent waiting (the database, a sleep) isn't CPU: <a href="{{ base }}/methods">Methods</a> measures that. {{ overhead }}. Development only; never in production.</p>
+<p class="hint">Which functions the CPU was in, with no annotations: {{ crate::kernel::dashboard::web::count(samples, "sample", "samples") }}. <strong>Self</strong>: the function itself was running; <strong>total</strong>: it was on the stack. Time spent waiting (the database, a sleep) isn't CPU: <a href="{{ base }}/methods">Methods</a> measures that. {{ overhead }}. Development only; never in production.</p>
 {% if !routes.is_empty() %}<p class="hint">Serving in this window: {% for (r, n) in routes %}<a class="mono" href="{{ base }}/traces?route={{ r|urlencode }}">{{ r }}</a> <span class="muted">×{{ n }}</span>{% if !loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
 {% if !func.is_empty() %}
 <section class="panel" aria-labelledby="fn-title">
   <header><h2 id="fn-title" class="mono">{{ func }}</h2></header>
   <div class="grid two pad">
-    <div><h3>Called from</h3>{% if callers.is_empty() %}<p class="muted">(the root of its stacks)</p>{% else %}<ul class="plain">{% for (n, c, href) in callers %}<li><a class="mono" href="{{ href }}">{{ n }}</a> <span class="muted">{{ c }} samples</span></li>{% endfor %}</ul>{% endif %}</div>
-    <div><h3>Calls</h3>{% if callees.is_empty() %}<p class="muted">(nothing below it: its own code)</p>{% else %}<ul class="plain">{% for (n, c, href) in callees %}<li><a class="mono" href="{{ href }}">{{ n }}</a> <span class="muted">{{ c }} samples</span></li>{% endfor %}</ul>{% endif %}</div>
+    <div><h3>Called from</h3>{% if callers.is_empty() %}<p class="muted">(the root of its stacks)</p>{% else %}<ul class="plain">{% for (n, c, href) in callers %}<li><a class="mono" href="{{ href }}">{{ n }}</a> <span class="muted">{{ crate::kernel::dashboard::web::count(c, "sample", "samples") }}</span></li>{% endfor %}</ul>{% endif %}</div>
+    <div><h3>Calls</h3>{% if callees.is_empty() %}<p class="muted">(nothing below it: its own code)</p>{% else %}<ul class="plain">{% for (n, c, href) in callees %}<li><a class="mono" href="{{ href }}">{{ n }}</a> <span class="muted">{{ crate::kernel::dashboard::web::count(c, "sample", "samples") }}</span></li>{% endfor %}</ul>{% endif %}</div>
   </div>
 </section>
 {% endif %}
