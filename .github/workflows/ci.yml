@@ -53,6 +53,46 @@ jobs:
       - name: Every sample alone, then all together (SQLite and Postgres; clippy, cargo deny, cargo audit)
         run: tools/ci.sh
 
+  windows-app:                  # every sample installed (POSIX tools), for the Windows job to build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: rustfmt }
+      - run: tools/vendor-framework.sh host
+      - name: Install every sample into one app (cargo fmt, CSS; no build)
+        run: tools/ci.sh --prepare all
+      - name: Pack it (tar keeps modes and LF line endings)
+        run: tar -C .cache/ci/all -czf all-app.tar.gz app
+      - uses: actions/upload-artifact@v7
+        with: { name: all-app, path: all-app.tar.gz, retention-days: 3 }
+
+  windows:                      # Windows found real bugs (a cfg(unix)-only const, a file renamed while open)
+    needs: windows-app
+    runs-on: windows-latest
+    defaults: { run: { shell: bash } }
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+    steps:
+      - uses: actions/download-artifact@v7
+        with: { name: all-app }
+      - run: tar -xzf all-app.tar.gz
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: clippy }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: "app -> ../target" }
+      - uses: taiki-e/install-action@nextest
+      - name: clippy -D warnings (all targets), and no unwrap/expect in shipped code
+        working-directory: app
+        run: |
+          cargo clippy --all-targets --locked -- -D warnings
+          cargo clippy --lib --bins --locked -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+      - name: Every sample's tests on SQLite
+        working-directory: app
+        run: |
+          cargo run -q --locked -- routes > /dev/null
+          cargo nextest run --locked --no-fail-fast --status-level fail --final-status-level fail
+
   e2e:                          # a real browser through boosted links: every interactive page works
     runs-on: ubuntu-latest
     steps:
