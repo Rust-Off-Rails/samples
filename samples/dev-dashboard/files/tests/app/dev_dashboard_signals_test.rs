@@ -1218,9 +1218,7 @@ fn retry_attempts_are_not_sequential_calls() {
     );
     assert_eq!(upstreams::concurrent(&root), 1);
     // Two calls of their own, one after another: still flagged.
-    let two = request(
-        2,
-        600_000,
+    let two_calls = || {
         vec![
             span(1, None, "handler", 0, 590_000, "handler=\"lab::checkout\""),
             span(2, Some(1), "http", 1_000, 250_000, call),
@@ -1232,10 +1230,16 @@ fn retry_attempts_are_not_sequential_calls() {
                 240_000,
                 "service=\"payments\" http.method=\"POST\" http.host=api.example.com http.route=/charge",
             ),
-        ],
-    );
+        ]
+    };
+    let two = request(2, 600_000, two_calls());
     let s = upstreams::sequential(&waterfall::tree(&two, true)).unwrap();
     assert_eq!(s.calls.len(), 2);
+    // Work of the handler's between them (the second call needs it): not a run, however short.
+    let mut spans = two_calls();
+    spans.push(span(6, Some(1), "load_cart", 251_200, 300, ""));
+    let worked = request(3, 600_000, spans);
+    assert!(upstreams::sequential(&waterfall::tree(&worked, true)).is_none());
 }
 
 /// The time between a request's arrival and its first code is a `wait` row and its own share of
